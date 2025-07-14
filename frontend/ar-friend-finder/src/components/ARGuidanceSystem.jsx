@@ -117,6 +117,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
      const backendUrl = process.env.REACT_APP_BACKEND_URL;
 
      // Use the backendUrl to make the API call
+    console.log("Attempting to connect to backend at:", process.env.REACT_APP_BACKEND_URL);
      const response = await fetch(`${backendUrl}/api/ar/initialize`, {
        method: 'POST',
        headers: {
