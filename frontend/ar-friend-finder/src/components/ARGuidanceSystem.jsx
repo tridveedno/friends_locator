@@ -1,276 +1,133 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye } from 'lucide-react'
-import { Button } from '@/components/ui/button.jsx'
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye } from 'lucide-react';
+import { Button } from '@/components/ui/button.jsx';
 
 const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
-  const videoRef = useRef(null)
-  const canvasRef = useRef(null)
-  const arCanvasRef = useRef(null)
-  const animationFrameRef = useRef(null)
-  
-  const [isARActive, setIsARActive] = useState(false)
-  const [arResult, setArResult] = useState(null)
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [error, setError] = useState(null)
-  const [isInitialized, setIsInitialized] = useState(false)
-  const [trackingQuality, setTrackingQuality] = useState('unknown')
-  const [frameCount, setFrameCount] = useState(0)
-  const [useFallbackMode, setUseFallbackMode] = useState(false)
-  
-  // AR guidance state
-  const [arrowRotation, setArrowRotation] = useState(0)
-  const [arrowScale, setArrowScale] = useState(1)
-  const [distanceOpacity, setDistanceOpacity] = useState(1)
-  const [lastProcessTime, setLastProcessTime] = useState(0)
-  const [processingInterval] = useState(300) // Process every 300ms for smooth tracking
-  
-  // Smooth animation state
-  const [targetRotation, setTargetRotation] = useState(0)
-  const [currentRotation, setCurrentRotation] = useState(0)
-  const [animationSpeed] = useState(0.1) // Smoothing factor
-  
-  useEffect(() => {
-    initializeAR()
-    
-    return () => {
-      cleanupAR()
-    }
-  }, [])
-  
-  // Smooth rotation animation
-  useEffect(() => {
-    const animateRotation = () => {
-      setCurrentRotation(prev => {
-        const diff = targetRotation - prev
-        const normalizedDiff = ((diff + 180) % 360) - 180 // Normalize to -180 to 180
-        return prev + normalizedDiff * animationSpeed
-      })
-    }
-    
-    const interval = setInterval(animateRotation, 16) // 60fps
-    return () => clearInterval(interval)
-  }, [targetRotation, animationSpeed])
-  
-  const initializeAR = async () => {
-    try {
-      // Request camera access with optimal settings for AR tracking
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: 'environment',
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 },
-          frameRate: { ideal: 30, min: 20 }
-        }
-      })
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const arCanvasRef = useRef(null);
+  const animationFrameRef = useRef(null);
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        videoRef.current.play()
-        setIsARActive(true)
-        
-        // Wait for video to be ready
-        videoRef.current.onloadedmetadata = () => {
-          setupARCanvas()
-          initializeARSystem()
-        }
-      }
+  const [isARActive, setIsARActive] = useState(false);
+  const [arResult, setArResult] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [trackingQuality, setTrackingQuality] = useState('unknown');
+  const [frameCount, setFrameCount] = useState(0);
+  const [useFallbackMode, setUseFallbackMode] = useState(false);
+  const [arrowRotation, setArrowRotation] = useState(0);
+  const [arrowScale, setArrowScale] = useState(1);
+  const [distanceOpacity, setDistanceOpacity] = useState(1);
+  const [lastProcessTime, setLastProcessTime] = useState(0);
+  const [processingInterval] = useState(300);
+  const [targetRotation, setTargetRotation] = useState(0);
+  const [currentRotation, setCurrentRotation] = useState(0);
+  const [animationSpeed] = useState(0.1);
 
-    } catch (err) {
-      console.error('Error accessing camera:', err)
-      setError('Unable to access camera. Please ensure camera permissions are granted and try again.')
-    }
-  }
-  
-  const setupARCanvas = () => {
-    if (!arCanvasRef.current || !videoRef.current) return
-    
-    const canvas = arCanvasRef.current
-    const video = videoRef.current
-    
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    canvas.style.width = '100%'
-    canvas.style.height = '100%'
-  }
-  
-  const cleanupAR = () => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current)
-    }
-    
-    if (videoRef.current && videoRef.current.srcObject) {
-      const tracks = videoRef.current.srcObject.getTracks()
-      tracks.forEach(track => track.stop())
-    }
-  }
-  
+  // Define backendUrl once with fallback
+  const backendUrl = process.env.REACT_APP_BACKEND_URL || 'https://1f532e28ad96.ngrok-free.app';
+  console.log("Attempting to connect to backend at:", backendUrl);
+
+  // ... existing useEffect and other functions ...
+
   const initializeARSystem = async () => {
-    if (!videoRef.current || !friendPhoto) return
-
-    setIsProcessing(true)
-
+    if (!videoRef.current || !friendPhoto) return;
+    setIsProcessing(true);
     try {
-      // Capture initial frame for baseline
-      const initialFrame = captureCurrentFrame()
-      
-      // Get the backend URL from the environment variable
-     const backendUrl = process.env.REACT_APP_BACKEND_URL;
-
-     // Use the backendUrl to make the API call
-    console.log("Attempting to connect to backend at:", process.env.REACT_APP_BACKEND_URL);
-     const response = await fetch(`${backendUrl}/api/ar/initialize`, {
-       method: 'POST',
-       headers: {
-         'Content-Type': 'application/json',
-       },
-       body: JSON.stringify({
-         friend_photo: friendPhoto,
-         user_photo: initialFrame
-       })
-     });
-
-      if (!response.ok) {
-        throw new Error(`Backend error: ${response.status}`)
-      }
-
-      const result = await response.json()
-
+      const initialFrame = captureCurrentFrame();
+      const response = await fetch(`${backendUrl}/api/ar/initialize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          friend_photo: friendPhoto,
+          user_photo: initialFrame,
+        }),
+      });
+      if (!response.ok) throw new Error(`Backend error: ${response.status}`);
+      const result = await response.json();
       if (result.success) {
-        setIsInitialized(true)
-        setTrackingQuality('good')
-        setUseFallbackMode(false)
-        startARTracking()
+        setIsInitialized(true);
+        setTrackingQuality('good');
+        setUseFallbackMode(false);
+        startARTracking();
       } else {
-        throw new Error(result.error || 'Failed to initialize AR system')
+        throw new Error(result.error || 'Failed to initialize AR system');
       }
-      
     } catch (error) {
-      console.error('AR initialization error:', error)
-      
-      // Enable fallback mode for demo purposes
-      console.log('Enabling fallback mode for demonstration')
-      setUseFallbackMode(true)
-      setIsInitialized(true)
-      setTrackingQuality('fair')
-      startARTracking()
+      console.error('AR initialization error:', error);
+      console.log('Enabling fallback mode for demonstration');
+      setUseFallbackMode(true);
+      setIsInitialized(true);
+      setTrackingQuality('fair');
+      startARTracking();
     } finally {
-      setIsProcessing(false)
+      setIsProcessing(false);
     }
-  }
-  
-  const captureCurrentFrame = () => {
-    if (!videoRef.current || !canvasRef.current) return null
-    
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext('2d')
-    
-    canvas.width = videoRef.current.videoWidth
-    canvas.height = videoRef.current.videoHeight
-    
-    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height)
-    
-    return canvas.toDataURL('image/jpeg', 0.9)
-  }
-  
+  };
+
   const startARTracking = () => {
     const processFrame = async () => {
-      if (!isInitialized || !videoRef.current) return
-      
-      const currentTime = Date.now()
-      
-      // Throttle processing for performance
+      if (!isInitialized || !videoRef.current) return;
+      const currentTime = Date.now();
       if (currentTime - lastProcessTime < processingInterval) {
-        animationFrameRef.current = requestAnimationFrame(processFrame)
-        return
+        animationFrameRef.current = requestAnimationFrame(processFrame);
+        return;
       }
-      
-      setLastProcessTime(currentTime)
-      setFrameCount(prev => prev + 1)
-      
+      setLastProcessTime(currentTime);
+      setFrameCount(prev => prev + 1);
       try {
-        let result
-        
+        let result;
         if (useFallbackMode) {
-          // Fallback mode with simulated AR tracking
           result = {
             success: true,
-            distance: 25 + Math.sin(frameCount * 0.1) * 10, // Simulate changing distance
-            angle: 15 + Math.cos(frameCount * 0.05) * 20, // Simulate changing angle
+            distance: 25 + Math.sin(frameCount * 0.1) * 10,
+            angle: 15 + Math.cos(frameCount * 0.05) * 20,
             direction: Math.sin(frameCount * 0.03) > 0 ? 'right' : 'left',
             instruction: 'Walk forward and follow the arrow (Demo Mode)',
             confidence: 0.8 + Math.random() * 0.2,
             matches_count: 15 + Math.floor(Math.random() * 10),
-            tracking_quality: 'fair'
-          }
+            tracking_quality: 'fair',
+          };
         } else {
-          // Real backend processing
-          const currentFrame = captureCurrentFrame()
-          if (!currentFrame) return
-          
-         // Get the backend URL from the environment variable
-const backendUrl = process.env.REACT_APP_BACKEND_URL;
-
-// Use the backendUrl to make the API call to the 'track' endpoint
-const response = await fetch(`${backendUrl}/api/ar/track`, {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    current_frame: currentFrame
-  })
-});
-          
-          if (!response.ok) {
-            throw new Error(`Backend error: ${response.status}`)
-          }
-          
-          result = await response.json()
+          const currentFrame = captureCurrentFrame();
+          if (!currentFrame) return;
+          const response = await fetch(`${backendUrl}/api/ar/track`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ current_frame: currentFrame }),
+          });
+          if (!response.ok) throw new Error(`Backend error: ${response.status}`);
+          result = await response.json();
         }
-        
         if (result.success) {
-          setArResult(result)
-          setTrackingQuality(result.tracking_quality || 'good')
-          setError(null)
-          
-          // Update arrow rotation smoothly
-          updateArrowGuidance(result)
-          
-          // Draw AR overlays
-          drawAROverlays(result)
-          
+          setArResult(result);
+          setTrackingQuality(result.tracking_quality || 'good');
+          setError(null);
+          updateArrowGuidance(result);
+          drawAROverlays(result);
         } else {
-          // Handle tracking loss gracefully
           if (result.error && !result.error.includes('Insufficient matches')) {
-            console.warn('Tracking warning:', result.error)
+            console.warn('Tracking warning:', result.error);
           }
-          setTrackingQuality('poor')
-          
-          // Fade out guidance when tracking is lost
-          setDistanceOpacity(0.3)
+          setTrackingQuality('poor');
+          setDistanceOpacity(0.3);
         }
-        
       } catch (error) {
-        console.error('Frame processing error:', error)
-        
-        // If backend fails, switch to fallback mode
+        console.error('Frame processing error:', error);
         if (!useFallbackMode) {
-          console.log('Switching to fallback mode due to backend error')
-          setUseFallbackMode(true)
-          setTrackingQuality('fair')
+          console.log('Switching to fallback mode due to backend error');
+          setUseFallbackMode(true);
+          setTrackingQuality('fair');
         } else {
-          setTrackingQuality('poor')
-          setDistanceOpacity(0.3)
+          setTrackingQuality('poor');
+          setDistanceOpacity(0.3);
         }
       }
-      
-      // Continue tracking
-      animationFrameRef.current = requestAnimationFrame(processFrame)
-    }
-    
-    // Start the tracking loop
-    animationFrameRef.current = requestAnimationFrame(processFrame)
-  }
+      animationFrameRef.current = requestAnimationFrame(processFrame);
+    };
+    animationFrameRef.current = requestAnimationFrame(processFrame);
+  };
   
   const updateArrowGuidance = (result) => {
     if (!result) return
