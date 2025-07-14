@@ -3,15 +3,77 @@ import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye } f
 import { Button } from '@/components/ui/button.jsx';
 
 const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
-  // ... existing state and ref declarations ...
+  // State and refs
+  const [arResult, setArResult] = useState({
+    success: false,
+    distance: 50,
+    angle: 0,
+    direction: null,
+    instruction: '',
+    confidence: 0.5,
+    matches_count: 0,
+    tracking_quality: 'poor',
+  });
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [useFallbackMode, setUseFallbackMode] = useState(false);
+  const [trackingQuality, setTrackingQuality] = useState('poor');
+  const [error, setError] = useState(null);
+  const [targetRotation, setTargetRotation] = useState(0);
+  const [currentRotation, setCurrentRotation] = useState(0); // Added missing state
+  const [arrowScale, setArrowScale] = useState(1.0);
+  const [distanceOpacity, setDistanceOpacity] = useState(0.5);
+  const [isARActive, setIsARActive] = useState(false); // Added missing state
+  const [frameCount, setFrameCount] = useState(0);
+  const videoRef = useRef(null);
+  const arCanvasRef = useRef(null);
+  const canvasRef = useRef(null);
+  const animationFrameRef = useRef(null);
+  const lastProcessTime = useRef(0);
+  const processingInterval = 1000;
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://162a64905feb.ngrok-free.app';
   console.log("Attempting to connect to backend at:", backendUrl);
 
-  // ... existing useEffect, initializeAR, setupARCanvas, cleanupAR ...
+  // Setup video stream
+  useEffect(() => {
+    const setupVideo = async () => {
+      if (!videoRef.current) return;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        setIsARActive(true);
+      } catch (err) {
+        console.error('Video stream error:', err);
+        setError('Failed to access camera');
+      }
+    };
+
+    setupVideo();
+
+    return () => {
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject;
+        const tracks = stream.getTracks();
+        tracks.forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  // Initialize AR only when friendPhoto and videoRef are ready
+  useEffect(() => {
+    if (friendPhoto && !isInitialized && videoRef.current) {
+      initializeARSystem();
+    }
+    return () => cleanupAR();
+  }, [friendPhoto, isInitialized]);
 
   const initializeARSystem = async () => {
-    if (!videoRef.current || !friendPhoto) return;
+    if (!videoRef.current || !friendPhoto) {
+      console.log('Skipping initialization: videoRef or friendPhoto missing');
+      return;
+    }
     setIsProcessing(true);
     try {
       const initialFrame = captureCurrentFrame();
@@ -36,7 +98,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         setIsInitialized(true);
         setTrackingQuality('good');
         setUseFallbackMode(false);
-        setArResult(result); // Ensure arResult is set
+        setArResult(result);
         startARTracking();
       } else {
         throw new Error(result.error || 'Failed to initialize AR system');
@@ -67,11 +129,11 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     const processFrame = async () => {
       if (!isInitialized || !videoRef.current) return;
       const currentTime = Date.now();
-      if (currentTime - lastProcessTime < processingInterval) {
+      if (currentTime - lastProcessTime.current < processingInterval) {
         animationFrameRef.current = requestAnimationFrame(processFrame);
         return;
       }
-      setLastProcessTime(currentTime);
+      lastProcessTime.current = currentTime;
       setFrameCount(prev => prev + 1);
       try {
         let result;
@@ -142,7 +204,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   };
 
   const updateArrowGuidance = (result) => {
-    if (!result || !result.direction) return; // Prevent undefined access
+    if (!result || !result.direction) return;
     let rotation = 0;
     const distance = result.distance || 50;
     const angle = result.angle || 30;
@@ -161,6 +223,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     }
     rotation = Math.max(-90, Math.min(90, rotation));
     setTargetRotation(rotation);
+    setCurrentRotation(rotation); // Update currentRotation
     let scale = 1.0;
     if (distance < 10) {
       scale = 1.5;
@@ -171,112 +234,115 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     const confidence = result.confidence || 0.5;
     setDistanceOpacity(Math.max(0.5, confidence));
   };
-  
+
+  const captureCurrentFrame = () => {
+    if (!videoRef.current || !canvasRef.current) {
+      console.error('videoRef or canvasRef is not defined in captureCurrentFrame');
+      return null;
+    }
+    try {
+      const canvas = canvasRef.current;
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg');
+    } catch (err) {
+      console.error('Error capturing frame:', err);
+      return null;
+    }
+  };
+
   const drawAROverlays = (result) => {
-    if (!arCanvasRef.current) return
-    
-    const canvas = arCanvasRef.current
-    const ctx = canvas.getContext('2d')
-    
-    // Clear previous overlays
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    
-    // Draw tracking indicators
-    drawTrackingIndicators(ctx, result)
-    
-    // Draw distance rings
-    drawDistanceRings(ctx, result)
-    
-    // Draw confidence meter
-    drawConfidenceMeter(ctx, result)
-  }
-  
+    if (!arCanvasRef.current) {
+      console.error('arCanvasRef is not defined in drawAROverlays');
+      return;
+    }
+    const canvas = arCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawTrackingIndicators(ctx, result);
+    drawDistanceRings(ctx, result);
+    drawConfidenceMeter(ctx, result);
+  };
+
   const drawTrackingIndicators = (ctx, result) => {
-    if (!result.matches_count) return
-    
-    const centerX = ctx.canvas.width / 2
-    const centerY = ctx.canvas.height / 2
-    
-    // Draw tracking points (simulated)
-    ctx.fillStyle = 'rgba(0, 255, 0, 0.6)'
-    const numPoints = Math.min(result.matches_count, 20)
-    
+    if (!result.matches_count) return;
+    const centerX = ctx.canvas.width / 2;
+    const centerY = ctx.canvas.height / 2;
+    ctx.fillStyle = 'rgba(0, 255, 0, 0.6)';
+    const numPoints = Math.min(result.matches_count, 20);
     for (let i = 0; i < numPoints; i++) {
-      const angle = (i / numPoints) * 2 * Math.PI
-      const radius = 100 + Math.random() * 200
-      const x = centerX + Math.cos(angle) * radius
-      const y = centerY + Math.sin(angle) * radius
-      
-      ctx.beginPath()
-      ctx.arc(x, y, 3, 0, 2 * Math.PI)
-      ctx.fill()
+      const angle = (i / numPoints) * 2 * Math.PI;
+      const radius = 100 + Math.random() * 200;
+      const x = centerX + Math.cos(angle) * radius;
+      const y = centerY + Math.sin(angle) * radius;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, 2 * Math.PI);
+      ctx.fill();
     }
-  }
-  
+  };
+
   const drawDistanceRings = (ctx, result) => {
-    const centerX = ctx.canvas.width / 2
-    const centerY = ctx.canvas.height / 2
-    const distance = result.distance || 50
-    
-    // Draw concentric rings based on distance
-    ctx.strokeStyle = 'rgba(255, 165, 0, 0.3)'
-    ctx.lineWidth = 2
-    
-    const maxRadius = Math.min(centerX, centerY) * 0.8
-    const numRings = 3
-    
+    const centerX = ctx.canvas.width / 2;
+    const centerY = ctx.canvas.height / 2;
+    const distance = result.distance || 50;
+    ctx.strokeStyle = 'rgba(255, 165, 0, 0.3)';
+    ctx.lineWidth = 2;
+    const maxRadius = Math.min(centerX, centerY) * 0.8;
+    const numRings = 3;
     for (let i = 1; i <= numRings; i++) {
-      const radius = (maxRadius / numRings) * i
-      ctx.beginPath()
-      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI)
-      ctx.stroke()
-      
-      // Add distance labels
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'
-      ctx.font = '12px Arial'
-      ctx.textAlign = 'center'
-      const ringDistance = Math.round((distance / numRings) * i)
-      ctx.fillText(`${ringDistance}m`, centerX, centerY - radius + 15)
+      const radius = (maxRadius / numRings) * i;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.font = '12px Arial';
+      ctx.textAlign = 'center';
+      const ringDistance = Math.round((distance / numRings) * i);
+      ctx.fillText(`${ringDistance}m`, centerX, centerY - radius + 15);
     }
-  }
-  
+  };
+
   const drawConfidenceMeter = (ctx, result) => {
-    const confidence = result.confidence || 0.5
-    const x = 20
-    const y = ctx.canvas.height - 60
-    const width = 100
-    const height = 10
-    
-    // Background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
-    ctx.fillRect(x, y, width, height)
-    
-    // Confidence bar
-    const confidenceColor = confidence > 0.7 ? 'green' : confidence > 0.4 ? 'orange' : 'red'
-    ctx.fillStyle = confidenceColor
-    ctx.fillRect(x, y, width * confidence, height)
-    
-    // Label
-    ctx.fillStyle = 'white'
-    ctx.font = '10px Arial'
-    ctx.fillText('Tracking Confidence', x, y - 5)
-  }
-  
+    const confidence = result.confidence || 0.5;
+    const x = 20;
+    const y = ctx.canvas.height - 60;
+    const width = 100;
+    const height = 10;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(x, y, width, height);
+    const confidenceColor = confidence > 0.7 ? 'green' : confidence > 0.4 ? 'orange' : 'red';
+    ctx.fillStyle = confidenceColor;
+    ctx.fillRect(x, y, width * confidence, height);
+    ctx.fillStyle = 'white';
+    ctx.font = '10px Arial';
+    ctx.fillText('Tracking Confidence', x, y - 5);
+  };
+
   const handleRetry = () => {
-    setArResult(null)
-    setIsProcessing(false)
-    setError(null)
-    setIsInitialized(false)
-    setTrackingQuality('unknown')
-    setFrameCount(0)
-    setCurrentRotation(0)
-    setTargetRotation(0)
-    setUseFallbackMode(false)
-    
+    setArResult({
+      success: false,
+      distance: 50,
+      angle: 0,
+      direction: null,
+      instruction: '',
+      confidence: 0.5,
+      matches_count: 0,
+      tracking_quality: 'poor',
+    });
+    setIsProcessing(false);
+    setError(null);
+    setIsInitialized(false);
+    setTrackingQuality('unknown');
+    setFrameCount(0);
+    setCurrentRotation(0);
+    setTargetRotation(0);
+    setUseFallbackMode(false);
     setTimeout(() => {
-      initializeARSystem()
-    }, 500)
-  }
+      initializeARSystem();
+    }, 500);
+  };
 
   const handleComplete = () => {
     if (arResult && onAnalysisComplete) {
@@ -284,32 +350,50 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         ...arResult,
         method: useFallbackMode ? 'fallback_ar_tracking' : 'advanced_ar_tracking',
         frame_count: frameCount,
-        tracking_quality: trackingQuality
-      })
+        tracking_quality: trackingQuality,
+      });
     }
-  }
-  
+  };
+
   const getTrackingStatusColor = () => {
     switch (trackingQuality) {
-      case 'good': return 'bg-green-500'
-      case 'fair': return 'bg-yellow-500'
-      case 'poor': return 'bg-red-500'
-      default: return 'bg-gray-500'
+      case 'good':
+        return 'bg-green-500';
+      case 'fair':
+        return 'bg-yellow-500';
+      case 'poor':
+        return 'bg-red-500';
+      default:
+        return 'bg-gray-500';
     }
-  }
-  
+  };
+
   const getTrackingIcon = () => {
     switch (trackingQuality) {
-      case 'good': return <Wifi className="w-3 h-3" />
-      case 'fair': return <Target className="w-3 h-3" />
-      case 'poor': return <WifiOff className="w-3 h-3" />
-      default: return <Eye className="w-3 h-3" />
+      case 'good':
+        return <Wifi className="w-3 h-3" />;
+      case 'fair':
+        return <Target className="w-3 h-3" />;
+      case 'poor':
+        return <WifiOff className="w-3 h-3" />;
+      default:
+        return <Eye className="w-3 h-3" />;
     }
-  }
+  };
+
+  const cleanupAR = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject;
+      const tracks = stream.getTracks();
+      tracks.forEach(track => track.stop());
+    }
+  };
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
-      {/* Camera Feed */}
       <video
         ref={videoRef}
         className="absolute inset-0 w-full h-full object-cover"
@@ -317,20 +401,13 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         muted
         autoPlay
       />
-      
-      {/* AR Overlay Canvas */}
       <canvas
         ref={arCanvasRef}
         className="absolute inset-0 w-full h-full pointer-events-none"
         style={{ zIndex: 1 }}
       />
-      
-      {/* Hidden canvas for frame capture */}
       <canvas ref={canvasRef} className="hidden" />
-
-      {/* UI Overlay Container */}
       <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 2 }}>
-        {/* Top UI Bar */}
         <div className="absolute top-4 left-4 right-4 flex justify-between items-center pointer-events-auto">
           <Button
             onClick={onBack}
@@ -340,85 +417,68 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           >
             <X className="w-4 h-4" />
           </Button>
-          
           <div className="flex items-center gap-2">
-            {/* Tracking Quality Indicator */}
             <div className="flex items-center bg-black/50 px-2 py-1 rounded-full">
               <div className={`w-2 h-2 rounded-full mr-2 ${getTrackingStatusColor()}`}></div>
               {getTrackingIcon()}
             </div>
-            
-            {/* Status */}
             <div className="bg-black/50 px-3 py-1 rounded-full">
               <span className="text-white text-sm font-medium">
-                {isProcessing ? 'Initializing...' : 
-                 isInitialized ? (useFallbackMode ? 'AR Demo' : 'AR Tracking') : 
-                 isARActive ? 'Camera Ready' : 'Starting...'}
+                {isProcessing
+                  ? 'Initializing...'
+                  : isInitialized
+                  ? useFallbackMode
+                    ? 'AR Demo'
+                    : 'AR Tracking'
+                  : isARActive
+                  ? 'Camera Ready'
+                  : 'Starting...'}
               </span>
             </div>
           </div>
         </div>
-
-        {/* Main AR Navigation Overlay */}
         {arResult && isInitialized && !isProcessing && (
           <div className="absolute inset-0 flex items-center justify-center">
-            {/* 3D-style Directional Arrow */}
-            <div 
+            <div
               className="relative transition-all duration-300 ease-out"
               style={{
                 transform: `rotate(${currentRotation}deg) scale(${arrowScale})`,
-                opacity: distanceOpacity
+                opacity: distanceOpacity,
               }}
             >
-              {/* Arrow shadow for 3D effect */}
               <div className="absolute inset-0 bg-black/30 rounded-full p-6 transform translate-x-1 translate-y-1 blur-sm">
                 <ArrowUp className="w-12 h-12 text-transparent" />
               </div>
-              
-              {/* Main arrow */}
               <div className="relative bg-gradient-to-b from-orange-400 to-orange-600 rounded-full p-6 shadow-2xl border-4 border-white/30">
                 <ArrowUp className="w-12 h-12 text-white drop-shadow-lg" />
               </div>
-              
-              {/* Pulse effect for attention */}
               <div className="absolute inset-0 bg-orange-500/20 rounded-full animate-ping"></div>
-              
-              {/* Direction indicator */}
               <div className="absolute -top-2 left-1/2 transform -translate-x-1/2">
                 <Compass className="w-6 h-6 text-white/80" />
               </div>
             </div>
           </div>
         )}
-
-        {/* Enhanced Distance and Instruction Overlay */}
         {arResult && isInitialized && !isProcessing && (
           <div className="absolute bottom-20 left-4 right-4 pointer-events-auto">
-            <div 
+            <div
               className="bg-gradient-to-t from-black/90 to-black/70 rounded-xl p-6 text-center backdrop-blur-md border border-white/20"
               style={{ opacity: distanceOpacity }}
             >
-              {/* Distance display with icon */}
               <div className="flex items-center justify-center mb-3">
                 <MapPin className="w-6 h-6 text-orange-400 mr-2" />
                 <span className="text-white text-2xl font-bold">
                   {Math.round(arResult.distance)}m away
                 </span>
               </div>
-              
-              {/* Instruction text */}
               <div className="text-white/90 text-base mb-4 leading-relaxed">
                 {arResult.instruction}
               </div>
-              
-              {/* Technical info and quality indicators */}
               <div className="flex justify-between items-center text-xs text-white/60 mb-4">
                 <span>Tracking: {arResult.matches_count || 0} features</span>
                 <span>Quality: {trackingQuality}</span>
                 <span>Mode: {useFallbackMode ? 'Demo' : 'Live'}</span>
               </div>
-              
-              {/* Action buttons */}
               <div className="flex gap-3">
                 <Button
                   onClick={handleRetry}
@@ -437,8 +497,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             </div>
           </div>
         )}
-
-        {/* Enhanced Processing Overlay */}
         {isProcessing && (
           <div className="absolute inset-0 bg-black/60 flex items-center justify-center backdrop-blur-sm">
             <div className="bg-black/80 rounded-xl p-8 text-center border border-white/20">
@@ -457,8 +515,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             </div>
           </div>
         )}
-
-        {/* Error Overlay */}
         {error && (
           <div className="absolute inset-0 bg-black/80 flex items-center justify-center pointer-events-auto backdrop-blur-sm">
             <div className="bg-red-900/90 rounded-xl p-6 text-center max-w-sm mx-4 border border-red-500/30">
@@ -470,8 +526,8 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
               </div>
               <Button
                 onClick={() => {
-                  setError(null)
-                  handleRetry()
+                  setError(null);
+                  handleRetry();
                 }}
                 className="bg-red-600 hover:bg-red-700 text-white w-full"
               >
@@ -480,8 +536,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             </div>
           </div>
         )}
-
-        {/* Instructions for first-time users */}
         {isARActive && !isInitialized && !isProcessing && !error && (
           <div className="absolute bottom-20 left-4 right-4">
             <div className="bg-black/80 rounded-xl p-6 text-center backdrop-blur-sm border border-white/20">
@@ -496,8 +550,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         )}
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default ARGuidanceSystem
-
+export default ARGuidanceSystem;
