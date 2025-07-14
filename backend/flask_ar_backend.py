@@ -131,13 +131,14 @@ def analyze_photos():
         init_result = temp_ar_system.initialize_from_photos(friend_photo, user_photo)
         
         if not init_result['success']:
+            logger.error(f"Initialization failed: {init_result.get('error')}")
             return jsonify(init_result), 500
         
         # Process the user photo as a single frame
         result = temp_ar_system.process_ar_frame(user_photo)
         
         if result['success']:
-            # Format for legacy compatibility
+            logger.info(f"Analysis successful: Distance={result['distance']:.1f}m, Matches={result.get('matches_count', 0)}")
             return jsonify({
                 'success': True,
                 'distance': result['distance'],
@@ -145,20 +146,17 @@ def analyze_photos():
                 'direction': result['direction'],
                 'instruction': result['instruction'],
                 'confidence': result.get('confidence', 0.8),
-                'method': 'computer_vision_analysis'
+                'method': 'computer_vision_analysis',
+                'output_image_base64': result.get('output_image_base64')
             })
         else:
-            # Fallback to demo result if analysis fails
-            logger.warning("Analysis failed, returning demo result")
+            logger.error(f"Analysis failed: {result.get('error')}, Matches={result.get('matches_count', 0)}")
             return jsonify({
-                'success': True,
-                'distance': 45 + np.random.randint(-20, 20),
-                'angle': 15 + np.random.randint(-10, 10),
-                'direction': np.random.choice(['left', 'right']),
-                'instruction': 'Demo: Walk forward and turn as indicated',
-                'demo_mode': True,
-                'confidence': 0.6
-            })
+                'success': False,
+                'error': result.get('error'),
+                'tracking_quality': result.get('tracking_quality', 'poor'),
+                'output_image_base64': result.get('output_image_base64')
+            }), 500
             
     except Exception as e:
         logger.error(f"Exception in photo analysis: {e}")
@@ -296,4 +294,3 @@ if __name__ == '__main__':
         logger.error(f"Failed to load AR system: {e}")
     
     app.run(host='0.0.0.0', port=5000, debug=True)
-
