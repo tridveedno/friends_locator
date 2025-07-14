@@ -37,29 +37,32 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   // Setup video stream
   useEffect(() => {
-    const setupVideo = async () => {
-      if (!videoRef.current) return;
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-        setIsARActive(true);
-      } catch (err) {
-        console.error('Video stream error:', err);
-        setError('Failed to access camera');
-      }
-    };
+  const setupVideo = async () => {
+    if (!videoRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }, // Use rear camera
+      });
+      videoRef.current.srcObject = stream;
+      videoRef.current.play();
+      setIsARActive(true);
+    } catch (err) {
+      console.error('Video stream error:', err);
+      setError('Failed to access rear camera');
+      setUseFallbackMode(true); // Switch to Demo Mode on camera failure
+    }
+  };
 
-    setupVideo();
+  setupVideo();
 
-    return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject;
-        const tracks = stream.getTracks();
-        tracks.forEach(track => track.stop());
-      }
-    };
-  }, []);
+  return () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject;
+      const tracks = stream.getTracks();
+      tracks.forEach(track => track.stop());
+    }
+  };
+}, []);
 
   // Initialize AR only when friendPhoto and videoRef are ready
   useEffect(() => {
