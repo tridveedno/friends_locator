@@ -3,39 +3,21 @@ import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye } f
 import { Button } from '@/components/ui/button.jsx';
 
 const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const arCanvasRef = useRef(null);
-  const animationFrameRef = useRef(null);
+  // ... existing state and ref declarations ...
 
-  const [isARActive, setIsARActive] = useState(false);
-  const [arResult, setArResult] = useState(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [error, setError] = useState(null);
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [trackingQuality, setTrackingQuality] = useState('unknown');
-  const [frameCount, setFrameCount] = useState(0);
-  const [useFallbackMode, setUseFallbackMode] = useState(false);
-  const [arrowRotation, setArrowRotation] = useState(0);
-  const [arrowScale, setArrowScale] = useState(1);
-  const [distanceOpacity, setDistanceOpacity] = useState(1);
-  const [lastProcessTime, setLastProcessTime] = useState(0);
-  const [processingInterval] = useState(300);
-  const [targetRotation, setTargetRotation] = useState(0);
-  const [currentRotation, setCurrentRotation] = useState(0);
-  const [animationSpeed] = useState(0.1);
-
-  // Define backendUrl once with fallback
-  const backendUrl = process.env.REACT_APP_BACKEND_URL || 'https://1f532e28ad96.ngrok-free.app';
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://1f532e28ad96.ngrok-free.app';
   console.log("Attempting to connect to backend at:", backendUrl);
 
-  // ... existing useEffect and other functions ...
+  // ... existing useEffect, initializeAR, setupARCanvas, cleanupAR ...
 
   const initializeARSystem = async () => {
     if (!videoRef.current || !friendPhoto) return;
     setIsProcessing(true);
     try {
       const initialFrame = captureCurrentFrame();
+      if (!initialFrame) throw new Error('Failed to capture initial frame');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       const response = await fetch(`${backendUrl}/api/ar/initialize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -43,23 +25,38 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           friend_photo: friendPhoto,
           user_photo: initialFrame,
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+      console.log('Initialize response status:', response.status, 'URL:', `${backendUrl}/api/ar/initialize`);
       if (!response.ok) throw new Error(`Backend error: ${response.status}`);
       const result = await response.json();
+      console.log('Initialize response:', result);
       if (result.success) {
         setIsInitialized(true);
         setTrackingQuality('good');
         setUseFallbackMode(false);
+        setArResult(result); // Ensure arResult is set
         startARTracking();
       } else {
         throw new Error(result.error || 'Failed to initialize AR system');
       }
     } catch (error) {
       console.error('AR initialization error:', error);
-      console.log('Enabling fallback mode for demonstration');
+      setError(`Initialization failed: ${error.message}`);
       setUseFallbackMode(true);
       setIsInitialized(true);
       setTrackingQuality('fair');
+      setArResult({
+        success: true,
+        distance: 25,
+        angle: 0,
+        direction: 'forward',
+        instruction: 'Walk forward (Demo Mode)',
+        confidence: 0.8,
+        matches_count: 15,
+        tracking_quality: 'fair',
+      });
       startARTracking();
     } finally {
       setIsProcessing(false);
@@ -92,11 +89,16 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         } else {
           const currentFrame = captureCurrentFrame();
           if (!currentFrame) return;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
           const response = await fetch(`${backendUrl}/api/ar/track`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ current_frame: currentFrame }),
+            signal: controller.signal,
           });
+          clearTimeout(timeoutId);
+          console.log('Track response status:', response.status, 'URL:', `${backendUrl}/api/ar/track`);
           if (!response.ok) throw new Error(`Backend error: ${response.status}`);
           result = await response.json();
         }
@@ -115,10 +117,20 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         }
       } catch (error) {
         console.error('Frame processing error:', error);
+        setError(`Tracking error: ${error.message}`);
         if (!useFallbackMode) {
-          console.log('Switching to fallback mode due to backend error');
           setUseFallbackMode(true);
           setTrackingQuality('fair');
+          setArResult({
+            success: true,
+            distance: 25,
+            angle: 0,
+            direction: 'forward',
+            instruction: 'Walk forward (Demo Mode)',
+            confidence: 0.8,
+            matches_count: 15,
+            tracking_quality: 'fair',
+          });
         } else {
           setTrackingQuality('poor');
           setDistanceOpacity(0.3);
@@ -128,49 +140,37 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     };
     animationFrameRef.current = requestAnimationFrame(processFrame);
   };
-  
+
   const updateArrowGuidance = (result) => {
-    if (!result) return
-    
-    // Calculate target rotation with improved accuracy for 20m distances
-    let rotation = 0
-    const distance = result.distance || 50
-    const angle = result.angle || 30
-    
-    // Improved angle calculation for medium to long distances
+    if (!result || !result.direction) return; // Prevent undefined access
+    let rotation = 0;
+    const distance = result.distance || 50;
+    const angle = result.angle || 30;
     if (distance > 15) {
-      // For longer distances, use more precise angle calculation
       if (result.direction === 'left') {
-        rotation = -(angle * 0.8) // Slightly reduce angle for better accuracy
+        rotation = -(angle * 0.8);
       } else if (result.direction === 'right') {
-        rotation = angle * 0.8
+        rotation = angle * 0.8;
       }
     } else {
-      // For shorter distances, use standard calculation
       if (result.direction === 'left') {
-        rotation = -angle
+        rotation = -angle;
       } else if (result.direction === 'right') {
-        rotation = angle
+        rotation = angle;
       }
     }
-    
-    // Clamp rotation to reasonable range
-    rotation = Math.max(-90, Math.min(90, rotation))
-    setTargetRotation(rotation)
-    
-    // Update arrow scale based on distance
-    let scale = 1.0
+    rotation = Math.max(-90, Math.min(90, rotation));
+    setTargetRotation(rotation);
+    let scale = 1.0;
     if (distance < 10) {
-      scale = 1.5 // Larger arrow when close
+      scale = 1.5;
     } else if (distance > 100) {
-      scale = 0.8 // Smaller arrow when far
+      scale = 0.8;
     }
-    setArrowScale(scale)
-    
-    // Update opacity based on tracking quality
-    const confidence = result.confidence || 0.5
-    setDistanceOpacity(Math.max(0.5, confidence))
-  }
+    setArrowScale(scale);
+    const confidence = result.confidence || 0.5;
+    setDistanceOpacity(Math.max(0.5, confidence));
+  };
   
   const drawAROverlays = (result) => {
     if (!arCanvasRef.current) return
