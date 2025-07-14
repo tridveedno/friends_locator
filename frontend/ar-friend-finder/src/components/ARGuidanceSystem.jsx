@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button.jsx';
 const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   // ... existing state and ref declarations ...
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://1f532e28ad96.ngrok-free.app';
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://162a64905feb.ngrok-free.app';
   console.log("Attempting to connect to backend at:", backendUrl);
 
   // ... existing useEffect, initializeAR, setupARCanvas, cleanupAR ...
