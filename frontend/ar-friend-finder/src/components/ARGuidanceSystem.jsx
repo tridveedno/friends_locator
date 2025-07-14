@@ -113,17 +113,20 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       // Capture initial frame for baseline
       const initialFrame = captureCurrentFrame()
       
-      // Try to call the real backend for initialization
-      const response = await fetch('https://5000-isswhq3yrro3osud1js5b-645c1f16.manusvm.computer/api/ar/initialize', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          friend_photo: friendPhoto,
-          user_photo: initialFrame
-        })
-      })
+      // Get the backend URL from the environment variable
+     const backendUrl = process.env.REACT_APP_BACKEND_URL;
+
+     // Use the backendUrl to make the API call
+     const response = await fetch(`${backendUrl}/api/ar/initialize`, {
+       method: 'POST',
+       headers: {
+         'Content-Type': 'application/json',
+       },
+       body: JSON.stringify({
+         friend_photo: friendPhoto,
+         user_photo: initialFrame
+       })
+     });
 
       if (!response.ok) {
         throw new Error(`Backend error: ${response.status}`)
@@ -203,15 +206,19 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           const currentFrame = captureCurrentFrame()
           if (!currentFrame) return
           
-          const response = await fetch('https://5000-isswhq3yrro3osud1js5b-645c1f16.manusvm.computer/api/ar/track', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              current_frame: currentFrame
-            })
-          })
+         // Get the backend URL from the environment variable
+const backendUrl = process.env.REACT_APP_BACKEND_URL;
+
+// Use the backendUrl to make the API call to the 'track' endpoint
+const response = await fetch(`${backendUrl}/api/ar/track`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    current_frame: currentFrame
+  })
+});
           
           if (!response.ok) {
             throw new Error(`Backend error: ${response.status}`)
