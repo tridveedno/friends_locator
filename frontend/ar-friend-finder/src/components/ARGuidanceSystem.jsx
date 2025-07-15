@@ -36,24 +36,29 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   console.log("Attempting to connect to backend at:", backendUrl);
 
   // Setup video stream
-  useEffect(() => {
+ useEffect(() => {
   const setupVideo = async () => {
     if (!videoRef.current) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }, // Use rear camera
+        video: { facingMode: 'environment' },
       });
       videoRef.current.srcObject = stream;
-      videoRef.current.play();
-      setIsARActive(true);
+
+      // ⏳ Wait for the video to be ready
+      videoRef.current.onloadedmetadata = () => {
+        videoRef.current.play();
+        setIsARActive(true);
+      };
     } catch (err) {
       console.error('Video stream error:', err);
       setError('Failed to access rear camera');
-      setUseFallbackMode(true); // Switch to Demo Mode on camera failure
+      setUseFallbackMode(true);
     }
   };
 
   setupVideo();
+}, []);
 
   return () => {
     if (videoRef.current && videoRef.current.srcObject) {
