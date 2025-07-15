@@ -1,9 +1,8 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button.jsx';
 
 const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
-  // State and refs
   const [arResult, setArResult] = useState({
     success: false,
     distance: 50,
@@ -20,10 +19,10 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const [trackingQuality, setTrackingQuality] = useState('poor');
   const [error, setError] = useState(null);
   const [targetRotation, setTargetRotation] = useState(0);
-  const [currentRotation, setCurrentRotation] = useState(0); // Added missing state
+  const [currentRotation, setCurrentRotation] = useState(0);
   const [arrowScale, setArrowScale] = useState(1.0);
   const [distanceOpacity, setDistanceOpacity] = useState(0.5);
-  const [isARActive, setIsARActive] = useState(false); // Added missing state
+  const [isARActive, setIsARActive] = useState(false);
   const [frameCount, setFrameCount] = useState(0);
   const videoRef = useRef(null);
   const arCanvasRef = useRef(null);
@@ -33,43 +32,40 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const processingInterval = 1000;
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
-  console.log("Attempting to connect to backend at:", backendUrl);
 
   // Setup video stream
- useEffect(() => {
-  const setupVideo = async () => {
-    if (!videoRef.current) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-      });
-      videoRef.current.srcObject = stream;
+  useEffect(() => {
+    const setupVideo = async () => {
+      if (!videoRef.current) return;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+        });
+        videoRef.current.srcObject = stream;
 
-      // ⏳ Wait for the video to be ready
-      videoRef.current.onloadedmetadata = () => {
-        videoRef.current.play();
-        setIsARActive(true);
-      };
-    } catch (err) {
-      console.error('Video stream error:', err);
-      setError('Failed to access rear camera');
-      setUseFallbackMode(true);
-    }
-  };
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current.play();
+          setIsARActive(true);
+        };
+      } catch (err) {
+        console.error('Video stream error:', err);
+        setError('Failed to access rear camera');
+        setUseFallbackMode(true);
+      }
+    };
 
-  setupVideo();
-}, []);
+    setupVideo();
 
-  return () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject;
-      const tracks = stream.getTracks();
-      tracks.forEach(track => track.stop());
-    }
-  };
-}, []);
+    return () => {
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject;
+        const tracks = stream.getTracks();
+        tracks.forEach(track => track.stop());
+      }
+    };
+  }, []);
 
-  // Initialize AR only when friendPhoto and videoRef are ready
+  // Initialize when video and friendPhoto are ready
   useEffect(() => {
     if (friendPhoto && !isInitialized && videoRef.current) {
       initializeARSystem();
@@ -82,12 +78,23 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       console.log('Skipping initialization: videoRef or friendPhoto missing');
       return;
     }
+
     setIsProcessing(true);
+
     try {
-      const initialFrame = captureCurrentFrame();
-if (!initialFrame || !initialFrame.startsWith('data:image')) {
-  throw new Error('Camera frame is invalid or not ready');
-}
+      let initialFrame = captureCurrentFrame();
+      let attempts = 0;
+
+      while ((!initialFrame || initialFrame.length < 10000) && attempts < 5) {
+        await new Promise(res => setTimeout(res, 300));
+        initialFrame = captureCurrentFrame();
+        attempts++;
+      }
+
+      if (!initialFrame || !initialFrame.startsWith('data:image')) {
+        throw new Error('Camera frame is invalid or not ready');
+      }
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
       const response = await fetch(`${backendUrl}/api/ar/initialize`, {
@@ -100,10 +107,10 @@ if (!initialFrame || !initialFrame.startsWith('data:image')) {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
-      console.log('Initialize response status:', response.status, 'URL:', `${backendUrl}/api/ar/initialize`);
+
       if (!response.ok) throw new Error(`Backend error: ${response.status}`);
       const result = await response.json();
-      console.log('Initialize response:', result);
+
       if (result.success) {
         setIsInitialized(true);
         setTrackingQuality('good');
@@ -133,6 +140,31 @@ if (!initialFrame || !initialFrame.startsWith('data:image')) {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const captureCurrentFrame = () => {
+    if (!videoRef.current || !canvasRef.current) {
+      console.error('videoRef or canvasRef is not defined in captureCurrentFrame');
+      return null;
+    }
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      console.error('Camera not ready — video dimensions are zero');
+      return null;
+    }
+
+    canvas.width = Math.min(video.videoWidth, 640);
+    canvas.height = Math.min(video.videoHeight, 480);
+
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const imageData = canvas.toDataURL('image/jpeg', 0.7);
+    console.log('✅ Captured frame length:', imageData.length);
+    return imageData.startsWith('data:image') ? imageData : null;
   };
 
   const startARTracking = () => {
@@ -244,33 +276,6 @@ if (!initialFrame || !initialFrame.startsWith('data:image')) {
     const confidence = result.confidence || 0.5;
     setDistanceOpacity(Math.max(0.5, confidence));
   };
-
-const captureCurrentFrame = () => {
-  if (!videoRef.current || !canvasRef.current) {
-    console.error('videoRef or canvasRef is not defined in captureCurrentFrame');
-    return null;
-  }
-
-  const video = videoRef.current;
-  const canvas = canvasRef.current;
-
-  if (video.videoWidth === 0 || video.videoHeight === 0) {
-    console.error('Camera not ready — video dimensions are zero');
-    return null;
-  }
-
-  canvas.width = Math.min(video.videoWidth, 640);
-  canvas.height = Math.min(video.videoHeight, 480);
-
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  const imageData = canvas.toDataURL('image/jpeg', 0.7);
-  console.log('✅ Captured frame data length:', imageData.length);
-  console.log('✅ Sample frame data:', imageData.slice(0, 30));
-
-  return imageData.startsWith('data:image') ? imageData : null;
-};
 
   const drawAROverlays = (result) => {
     if (!arCanvasRef.current) {
