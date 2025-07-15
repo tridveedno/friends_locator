@@ -72,6 +72,18 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     }
     return () => cleanupAR();
   }, [friendPhoto, isInitialized]);
+ 
+  const waitForCameraReady = async () => {
+    let attempts = 0;
+    while (
+      (!videoRef.current || videoRef.current.videoWidth === 0) &&
+      attempts < 10
+    ) {
+      console.log('⏳ Waiting for camera to be ready...');
+      await new Promise(res => setTimeout(res, 300));
+      attempts++;
+    }
+  };
 
   const initializeARSystem = async () => {
     if (!videoRef.current || !friendPhoto) {
@@ -82,6 +94,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     setIsProcessing(true);
 
     try {
+      await waitForCameraReady(); 
       let initialFrame = captureCurrentFrame();
       let attempts = 0;
 
