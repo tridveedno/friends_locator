@@ -28,12 +28,14 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const [forceStandardMode, setForceStandardMode] = useState(false);
   const [showCompressionPrompt, setShowCompressionPrompt] = useState(false);
   const [processedFriendPhoto, setProcessedFriendPhoto] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
   const videoRef = useRef(null);
   const arCanvasRef = useRef(null);
   const canvasRef = useRef(null);
   const animationFrameRef = useRef(null);
   const lastProcessTime = useRef(0);
   const processingInterval = 1000;
+  const maxRetries = 2;
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
 
@@ -63,7 +65,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   useEffect(() => {
     if (friendPhoto) {
-      resizeImage(friendPhoto, 160, 120, 0.03, (resizedData) => {
+      resizeImage(friendPhoto, 160, 120, 0.05, (resizedData) => {
         if (resizedData) {
           setProcessedFriendPhoto(resizedData);
           console.log('Processed friend photo size:', resizedData.length, 'bytes');
@@ -95,7 +97,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     reader.onload = () => {
       const base64String = reader.result;
       console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
-      resizeImage(base64String, 160, 120, 0.03, (resizedData) => {
+      resizeImage(base64String, 160, 120, 0.05, (resizedData) => {
         if (resizedData) {
           setUserPhoto(resizedData);
           console.log('Resized user photo size:', resizedData.length, 'bytes');
@@ -188,7 +190,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     canvas.height = 120;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageData = canvas.toDataURL('image/jpeg', 0.03);
+    const imageData = canvas.toDataURL('image/jpeg', 0.05);
     console.log('✅ Captured frame length:', imageData.length, 'bytes, Dimensions:', canvas.width, 'x', canvas.height);
     return imageData.startsWith('data:image') ? imageData : null;
   };
@@ -197,7 +199,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     if (!processedFriendPhoto) {
       console.error('Skipping initialization: processedFriendPhoto missing');
       setError('Please upload a friend photo before starting');
-      setUseFallbackMode(true);
       return;
     }
 
@@ -242,10 +243,11 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         user_photo_length: initialFrame.length,
         friend_photo_preview: processedFriendPhoto.substring(0, 50),
         user_photo_preview: initialFrame.substring(0, 50),
+        retry_count: retryCount,
       });
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
       const response = await fetch(`${backendUrl}/api/ar/initialize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -266,7 +268,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       }
 
       const result = await response.json();
-      console.log('Initialize response:', result);
+      console.log('Initialize response:', JSON.stringify(result, null, 2));
 
       if (result.success) {
         setIsInitialized(true);
@@ -276,15 +278,20 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         if (!forceStandardMode && result.tracking_quality !== 'standard') {
           startARTracking();
         }
-        if (forceStandardMode && result.matches_count < 10) {
-          setError('Low landmark matches. Try using photos with clearer or similar landmarks.');
+        if (forceStandardMode && result.matches_count < 10 && retryCount < maxRetries) {
+          setError('Low landmark matches. Please upload new photos with clearer or similar landmarks.');
           setTrackingQuality('poor');
           setArResult({
             ...result,
-            instruction: result.instruction || 'No clear direction, try new photos',
+            instruction: result.instruction || 'No clear direction, please upload new photos',
             confidence: 0.3,
             tracking_quality: 'poor',
           });
+          setRetryCount(prev => prev + 1);
+          setTimeout(() => {
+            setIsInitialized(false);
+            setError(null);
+          }, 5000);
         }
       } else {
         throw new Error(result.error || 'Failed to initialize system');
@@ -297,81 +304,22 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         setError(`Initialization failed: ${error.message}`);
         setShowCompressionPrompt(error.message.includes('Images too large'));
       }
-
-      if (!forceStandardMode) {
-        try {
-          console.log('Attempting fallback initialization in standard mode');
-          if (!userPhoto) {
-            throw new Error('User photo required for standard mode fallback');
-          }
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 15000);
-          const response = await fetch(`${backendUrl}/api/ar/initialize`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              friend_photo: processedFriendPhoto,
-              user_photo: userPhoto,
-              mode: 'standard',
-            }),
-            signal: controller.signal,
-          });
-          clearTimeout(timeoutId);
-
-          console.log('Fallback initialize response status:', response.status);
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Fallback initialize response error:', errorText);
-            throw new Error(`Fallback backend error: ${response.status} - ${errorText}`);
-          }
-
-          const result = await response.json();
-          console.log('Fallback initialize response:', result);
-          if (result.success) {
-            setIsInitialized(true);
-            setTrackingQuality(result.tracking_quality || 'standard');
-            setUseFallbackMode(false);
-            setArResult(result);
-            if (result.matches_count < 10) {
-              setError('Low landmark matches in standard mode. Try using photos with clearer or similar landmarks.');
-              setTrackingQuality('poor');
-              setArResult({
-                ...result,
-                instruction: result.instruction || 'No clear direction, try new photos',
-                confidence: 0.3,
-                tracking_quality: 'poor',
-              });
-            }
-          } else {
-            throw new Error(result.error || 'Standard mode initialization failed');
-          }
-        } catch (fallbackError) {
-          console.error('Standard mode fallback failed:', fallbackError);
-          setError(`Unable to initialize in standard mode: ${fallbackError.message}`);
-          setUseFallbackMode(true);
-          setIsInitialized(true);
-          setTrackingQuality('poor');
-          setArResult({
-            success: true,
-            distance: 25,
-            angle: 0,
-            direction: 'forward',
-            instruction: 'Walk forward (Demo Mode)',
-            confidence: 0.8,
-            matches_count: 15,
-            tracking_quality: 'poor',
-          });
-        }
-      } else {
-        setUseFallbackMode(true);
+      if (forceStandardMode && retryCount < maxRetries) {
+        setRetryCount(prev => prev + 1);
+        setTimeout(() => {
+          setIsInitialized(false);
+          setError(null);
+          initializeARSystem();
+        }, 2000);
+      } else if (forceStandardMode) {
         setIsInitialized(true);
         setTrackingQuality('poor');
         setArResult({
           success: true,
-          distance: 25,
+          distance: 50,
           angle: 0,
           direction: 'forward',
-          instruction: 'No clear direction, try new photos (Standard Mode)',
+          instruction: 'No clear direction, please upload new photos',
           confidence: 0.3,
           matches_count: 0,
           tracking_quality: 'poor',
@@ -583,6 +531,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     setCurrentRotation(0);
     setTargetRotation(0);
     setUseFallbackMode(false);
+    setRetryCount(0);
     setTimeout(() => {
       initializeARSystem();
     }, 500);
@@ -687,6 +636,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                   matches_count: 0,
                   tracking_quality: 'poor',
                 });
+                setRetryCount(0);
                 cleanupAR();
               }}
               variant="outline"
