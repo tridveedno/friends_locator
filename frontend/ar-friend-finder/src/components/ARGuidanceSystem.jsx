@@ -34,7 +34,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const lastProcessTime = useRef(0);
   const processingInterval = 1000;
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://9fe19749a652.ngrok-free.app';
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
 
   const resizeImage = (imageSrc, maxWidth, maxHeight, quality, callback) => {
     const img = new Image();
@@ -73,8 +73,8 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       setError('Please upload a JPEG or PNG user photo');
       return;
     }
-    if (file.size > 300000) {
-      setError('User photo too large. Please upload an image under 300KB.');
+    if (file.size > 5000000) { // Increased to 5MB
+      setError('User photo too large. Please upload an image under 5MB.');
       console.error('Upload rejected: File size', file.size, 'bytes');
       setShowCompressionPrompt(true);
       return;
@@ -83,7 +83,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     reader.onload = () => {
       const base64String = reader.result;
       console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
-      resizeImage(base64String, 240, 180, 0.05, (resizedData) => {
+      resizeImage(base64String, 160, 120, 0.03, (resizedData) => { // Reduced to 0.03 quality
         if (resizedData) {
           setUserPhoto(resizedData);
           console.log('Resized user photo size:', resizedData.length, 'bytes');
@@ -101,7 +101,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       if (!videoRef.current) return;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, // Lower ideal resolution
+          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
         });
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
@@ -173,13 +173,13 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     }
 
     const isHighRes = video.videoWidth * video.videoHeight > 1000000;
-    canvas.width = Math.min(video.videoWidth, isHighRes ? 160 : 240); // 160x120 for high-res
-    canvas.height = Math.min(video.videoHeight, isHighRes ? 120 : 180);
+    canvas.width = Math.min(video.videoWidth, isHighRes ? 160 : 160); // Always 160x120
+    canvas.height = Math.min(video.videoHeight, isHighRes ? 120 : 120);
 
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const imageData = canvas.toDataURL('image/jpeg', 0.05); // Lowered to 0.05
+    const imageData = canvas.toDataURL('image/jpeg', 0.03); // Reduced to 0.03
     console.log('✅ Captured frame length:', imageData.length, 'bytes, Dimensions:', canvas.width, 'x', canvas.height);
     return imageData.startsWith('data:image') ? imageData : null;
   };
@@ -211,12 +211,12 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error('Failed to capture valid initial frame');
       }
 
-      if (friendPhoto.length > 2500000 || initialFrame.length > 2500000) { // Increased to 2.5M chars (~1.9MB)
+      if (friendPhoto.length > 5000000 || initialFrame.length > 5000000) { // Increased to 5M chars (~3.8MB)
         console.error('Image too large:', {
           friend_photo_length: friendPhoto.length,
           user_photo_length: initialFrame.length,
         });
-        throw new Error('Images too large. Please use images under 1.9MB.');
+        throw new Error('Images too large. Please use images under 3.8MB.');
       }
 
       console.log('Sending initialize request with:', {
@@ -228,7 +228,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       });
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // Increased to 15s
       const response = await fetch(`${backendUrl}/api/ar/initialize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -271,11 +271,10 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         setShowCompressionPrompt(error.message.includes('Images too large'));
       }
 
-      // Fallback: Try standard mode
       try {
         console.log('Attempting fallback initialization in standard mode');
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // Increased to 15s
         const response = await fetch(`${backendUrl}/api/ar/initialize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -312,7 +311,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         } else {
           setError(`Unable to initialize in standard mode: ${fallbackError.message}`);
         }
-        // Last resort: Demo mode
         setUseFallbackMode(true);
         setIsInitialized(true);
         setTrackingQuality('poor');
@@ -360,7 +358,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           const currentFrame = captureCurrentFrame();
           if (!currentFrame) return;
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000);
+          const timeoutId = setTimeout(() => controller.abort(), 15000); // Increased to 15s
           const response = await fetch(`${backendUrl}/api/ar/track`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -741,7 +739,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
               {showCompressionPrompt && (
                 <div className="text-white/90 text-sm mb-4 leading-relaxed">
                   <AlertTriangle className="w-5 h-5 text-yellow-400 inline-block mr-2" />
-                  Your image is too large. For iPhone users, try saving photos in "Most Compatible" format (Settings > Camera > Formats) or compress to under 300KB using{' '}
+                  Your image is too large. For iPhone users, try saving photos in "Most Compatible" format (Settings > Camera > Formats) or compress to under 5MB using{' '}
                   <a
                     href="https://tinyjpg.com"
                     target="_blank"
@@ -772,7 +770,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                 Point your camera at the same landmark visible in your friend's photo
               </div>
               <div className="text-white/70 text-sm">
-                For best results, use a low-resolution photo (e.g., 640x480) or compress images to under 300KB
+                For best results, use photos under 5MB or adjust your camera to a lower resolution (e.g., 640x480)
               </div>
             </div>
           </div>
