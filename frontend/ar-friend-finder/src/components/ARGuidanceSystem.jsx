@@ -38,6 +38,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const maxRetries = 2;
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
+  console.log('Backend URL loaded:', backendUrl);
 
   const resizeImage = (imageSrc, maxWidth, maxHeight, quality, callback) => {
     const img = new Image();
@@ -112,7 +113,10 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   useEffect(() => {
     const setupVideo = async () => {
-      if (!videoRef.current || forceStandardMode) return;
+      if (!videoRef.current || forceStandardMode) {
+        console.log('Skipping video setup: forceStandardMode:', forceStandardMode, 'videoRef:', !!videoRef.current);
+        return;
+      }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
@@ -124,16 +128,20 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           console.log('✅ Camera stream started successfully');
         };
       } catch (err) {
-        console.error('Video stream error:', err.name, err.message);
-        setError('Failed to access camera. Please upload a user photo or switch to standard mode.');
+        console.error('Video stream error:', { name: err.name, message: err.message });
+        setError('Failed to access camera. Please upload a photo or switch to standard mode.');
         setForceStandardMode(true);
       }
     };
 
-    if (!forceStandardMode && !userPhoto) setupVideo();
+    if (!forceStandardMode && !userPhoto) {
+      console.log('Starting camera setup for AR mode');
+      setupVideo();
+    }
 
     return () => {
       if (videoRef.current && videoRef.current.srcObject) {
+        console.log('Cleaning up video stream');
         const stream = videoRef.current.srcObject;
         const tracks = stream.getTracks();
         tracks.forEach(track => track.stop());
@@ -142,21 +150,30 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   }, [userPhoto, forceStandardMode]);
 
   useEffect(() => {
-    if (processedFriendPhoto && !isInitialized) {
-      console.log('Triggering initializeARSystem with forceStandardMode:', forceStandardMode);
+    if (processedFriendPhoto && !isInitialized && !forceStandardMode) {
+      console.log('Initializing AR mode: processedFriendPhoto ready, forceStandardMode:', forceStandardMode);
       initializeARSystem();
     }
-    return () => cleanupAR();
+  }, [processedFriendPhoto, isInitialized, forceStandardMode]);
+
+  useEffect(() => {
+    if (processedFriendPhoto && userPhoto && !isInitialized && forceStandardMode) {
+      console.log('Initializing Standard mode: processedFriendPhoto and userPhoto ready, forceStandardMode:', forceStandardMode);
+      initializeARSystem();
+    }
   }, [processedFriendPhoto, userPhoto, isInitialized, forceStandardMode]);
 
   const waitForCameraReady = async () => {
-    if (forceStandardMode || userPhoto) return;
+    if (forceStandardMode || userPhoto) {
+      console.log('Skipping camera check for Standard mode or user photo');
+      return;
+    }
     let attempts = 0;
     while (
       (!videoRef.current || videoRef.current.videoWidth === 0) &&
       attempts < 10
     ) {
-      console.log('⏳ Waiting for camera to be ready...');
+      console.log('⏳ Waiting for camera to be ready... attempt:', attempts + 1);
       await new Promise(res => setTimeout(res, 300));
       attempts++;
     }
@@ -210,7 +227,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     }
 
     setIsProcessing(true);
-    console.log('Initializing AR system with mode:', forceStandardMode ? 'standard' : 'ar', 'retryCount:', retryCount);
+    console.log('Initializing system with mode:', forceStandardMode ? 'standard' : 'ar', 'retryCount:', retryCount);
 
     try {
       let initialFrame = forceStandardMode ? userPhoto : captureCurrentFrame();
@@ -239,13 +256,14 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error(`Images too large (${(Math.max(processedFriendPhoto.length, initialFrame.length) / 1000000).toFixed(2)}MB). Please use images under 3.8MB.`);
       }
 
-      console.log('Sending initialize request with:', {
+      console.log('Sending initialize request:', {
         mode: forceStandardMode ? 'standard' : 'ar',
         friend_photo_length: processedFriendPhoto.length,
         user_photo_length: initialFrame.length,
         friend_photo_preview: processedFriendPhoto.substring(0, 50),
         user_photo_preview: initialFrame.substring(0, 50),
         retry_count: retryCount,
+        url: `${backendUrl}/api/ar/initialize`,
       });
 
       const controller = new AbortController();
@@ -263,20 +281,30 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           signal: controller.signal,
         });
       } catch (fetchError) {
-        console.error('Fetch error:', fetchError.name, fetchError.message);
+        console.error('Fetch error details:', {
+          error: fetchError.name,
+          message: fetchError.message,
+          url: `${backendUrl}/api/ar/initialize`,
+          mode: forceStandardMode ? 'standard' : 'ar',
+        });
         throw new Error(`Network error: ${fetchError.message}. Check if backend is running at ${backendUrl}.`);
       }
       clearTimeout(timeoutId);
 
-      console.log('Initialize response status:', response.status, 'URL:', `${backendUrl}/api/ar/initialize`);
+      console.log('Initialize response:', { status: response.status, url: `${backendUrl}/api/ar/initialize` });
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Initialize response error:', response.status, errorText);
-        throw new Error(`Backend error: ${response.status} - ${errorText}. URL: ${backendUrl}/api/ar/initialize`);
+        console.error('Initialize response error:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText,
+          url: `${backendUrl}/api/ar/initialize`,
+        });
+        throw new Error(`Backend error: ${response.status} - ${errorText}`);
       }
 
       const result = await response.json();
-      console.log('Initialize response:', JSON.stringify(result, null, 2));
+      console.log('Initialize response data:', JSON.stringify(result, null, 2));
 
       if (result.success) {
         setIsInitialized(true);
@@ -284,6 +312,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         setUseFallbackMode(false);
         setArResult(result);
         if (!forceStandardMode && result.tracking_quality !== 'standard') {
+          console.log('Starting AR tracking');
           startARTracking();
         }
         if (forceStandardMode && result.matches_count < 10 && retryCount < maxRetries) {
@@ -305,49 +334,32 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error(result.error || 'Failed to initialize system');
       }
     } catch (error) {
-      console.error('Initialization error:', error.message, 'URL attempted:', backendUrl);
-      if (forceStandardMode) {
-        if (error.name === 'AbortError') {
-          setError('Request timed out. Please check your internet connection and backend server.');
-        } else {
-          setError(`Failed to connect to backend: ${error.message}. Please ensure the server is running.`);
-        }
-        setShowCompressionPrompt(error.message.includes('Images too large'));
-        if (retryCount < maxRetries) {
-          setRetryCount(prev => prev + 1);
-          setTimeout(() => {
-            setIsInitialized(false);
-            setError(null);
-            console.log('Retrying initialization, attempt:', retryCount + 1);
-            initializeARSystem();
-          }, 2000);
-        } else {
-          setIsInitialized(true);
-          setTrackingQuality('poor');
-          setArResult({
-            success: false,
-            distance: 0,
-            angle: 0,
-            direction: null,
-            instruction: 'Unable to connect to backend. Please try again later.',
-            confidence: 0,
-            matches_count: 0,
-            tracking_quality: 'poor',
-          });
-        }
+      console.error('Initialization error:', {
+        message: error.message,
+        url: `${backendUrl}/api/ar/initialize`,
+        mode: forceStandardMode ? 'standard' : 'ar',
+      });
+      setError(`Failed to initialize ${forceStandardMode ? 'Standard' : 'AR'} mode: ${error.message}`);
+      if (retryCount < maxRetries) {
+        setRetryCount(prev => prev + 1);
+        setTimeout(() => {
+          setIsInitialized(false);
+          setError(null);
+          console.log('Retrying initialization, attempt:', retryCount + 1);
+          initializeARSystem();
+        }, 2000);
       } else {
-        setUseFallbackMode(true);
         setIsInitialized(true);
-        setTrackingQuality('fair');
+        setTrackingQuality('poor');
         setArResult({
-          success: true,
-          distance: 25,
+          success: false,
+          distance: 0,
           angle: 0,
-          direction: 'forward',
-          instruction: 'Walk forward (AR Fallback Mode)',
-          confidence: 0.8,
-          matches_count: 15,
-          tracking_quality: 'fair',
+          direction: null,
+          instruction: `Failed to connect to backend: ${error.message}`,
+          confidence: 0,
+          matches_count: 0,
+          tracking_quality: 'poor',
         });
       }
     } finally {
@@ -355,13 +367,25 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     }
   };
 
-  const startARTracking = () => {
+  const startARTracking = async () => {
     if (forceStandardMode) {
-      console.log('Skipping AR tracking in standard mode');
+      console.log('Skipping AR tracking in Standard mode');
       return;
     }
+    if (!videoRef.current || !isARActive) {
+      console.error('Cannot start AR tracking: videoRef or isARActive missing', {
+        videoRef: !!videoRef.current,
+        isARActive,
+      });
+      setError('Camera not available. Please switch to Standard mode or try again.');
+      return;
+    }
+
     const processFrame = async () => {
-      if (!isInitialized || (!videoRef.current && !userPhoto)) return;
+      if (!isInitialized || !videoRef.current) {
+        console.warn('Stopping AR tracking: not initialized or videoRef missing');
+        return;
+      }
       const currentTime = Date.now();
       if (currentTime - lastProcessTime.current < processingInterval) {
         animationFrameRef.current = requestAnimationFrame(processFrame);
@@ -370,67 +394,73 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       lastProcessTime.current = currentTime;
       setFrameCount(prev => prev + 1);
       try {
-        let result;
-        if (useFallbackMode && trackingQuality !== 'standard') {
-          result = {
-            success: true,
-            distance: 25 + Math.sin(frameCount * 0.1) * 10,
-            angle: 15 + Math.cos(frameCount * 0.05) * 20,
-            direction: Math.sin(frameCount * 0.03) > 0 ? 'right' : 'left',
-            instruction: 'Walk forward and follow the arrow (AR Fallback Mode)',
-            confidence: 0.8 + Math.random() * 0.2,
-            matches_count: 15 + Math.floor(Math.random() * 10),
-            tracking_quality: 'fair',
-          };
-        } else {
-          const currentFrame = captureCurrentFrame();
-          if (!currentFrame) return;
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 15000);
-          const response = await fetch(`${backendUrl}/api/ar/track`, {
+        const currentFrame = captureCurrentFrame();
+        if (!currentFrame) {
+          console.error('Failed to capture frame for tracking');
+          throw new Error('No valid frame captured');
+        }
+
+        console.log('Sending track request:', {
+          frame_length: currentFrame.length,
+          frame_preview: currentFrame.substring(0, 50),
+          url: `${backendUrl}/api/ar/track`,
+          frame_count: frameCount,
+        });
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        let response;
+        try {
+          response = await fetch(`${backendUrl}/api/ar/track`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ current_frame: currentFrame }),
             signal: controller.signal,
           });
-          clearTimeout(timeoutId);
-          console.log('Track response status:', response.status, 'URL:', `${backendUrl}/api/ar/track`);
-          if (!response.ok) throw new Error(`Backend error: ${response.status}`);
-          result = await response.json();
+        } catch (fetchError) {
+          console.error('Track fetch error:', {
+            error: fetchError.name,
+            message: fetchError.message,
+            url: `${backendUrl}/api/ar/track`,
+          });
+          throw new Error(`Network error: ${fetchError.message}`);
         }
+        clearTimeout(timeoutId);
+
+        console.log('Track response:', { status: response.status, url: `${backendUrl}/api/ar/track` });
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Track response error:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText,
+            url: `${backendUrl}/api/ar/track`,
+          });
+          throw new Error(`Backend error: ${response.status} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        console.log('Track response data:', JSON.stringify(result, null, 2));
+
         if (result.success) {
           setArResult(result);
           setTrackingQuality(result.tracking_quality || 'good');
           setError(null);
+          setUseFallbackMode(false);
           updateArrowGuidance(result);
           drawAROverlays(result);
         } else {
-          if (result.error && !result.error.includes('Insufficient matches')) {
-            console.warn('Tracking warning:', result.error);
-          }
-          setTrackingQuality('poor');
-          setDistanceOpacity(0.3);
+          throw new Error(result.error || 'Tracking failed');
         }
       } catch (error) {
-        console.error('Frame processing error:', error);
-        setError(`Tracking error: ${error.message}`);
-        if (!useFallbackMode) {
-          setUseFallbackMode(true);
-          setTrackingQuality('fair');
-          setArResult({
-            success: true,
-            distance: 25,
-            angle: 0,
-            direction: 'forward',
-            instruction: 'Walk forward (AR Fallback Mode)',
-            confidence: 0.8,
-            matches_count: 15,
-            tracking_quality: 'fair',
-          });
-        } else {
-          setTrackingQuality('poor');
-          setDistanceOpacity(0.3);
-        }
+        console.error('Frame processing error:', {
+          message: error.message,
+          url: `${backendUrl}/api/ar/track`,
+          frame_count: frameCount,
+        });
+        setError(`AR tracking error: ${error.message}`);
+        setTrackingQuality('poor');
+        setDistanceOpacity(0.3);
       }
       animationFrameRef.current = requestAnimationFrame(processFrame);
     };
@@ -568,7 +598,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     if (arResult && onAnalysisComplete) {
       onAnalysisComplete({
         ...arResult,
-        method: trackingQuality === 'standard' ? 'standard_analysis' : useFallbackMode ? 'fallback_ar_tracking' : 'advanced_ar_tracking',
+        method: trackingQuality === 'standard' ? 'standard_analysis' : 'advanced_ar_tracking',
         frame_count: frameCount,
         tracking_quality: trackingQuality,
       });
@@ -605,9 +635,11 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   const cleanupAR = () => {
     if (animationFrameRef.current) {
+      console.log('Cleaning up AR tracking');
       cancelAnimationFrame(animationFrameRef.current);
     }
     if (videoRef.current && videoRef.current.srcObject) {
+      console.log('Stopping video stream');
       const stream = videoRef.current.srcObject;
       const tracks = stream.getTracks();
       tracks.forEach(track => track.stop());
@@ -651,7 +683,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             )}
             <Button
               onClick={() => {
-                console.log('Switching mode, current forceStandardMode:', forceStandardMode, 'new value:', !forceStandardMode);
+                console.log('Switch mode button clicked, current forceStandardMode:', forceStandardMode, 'new value:', !forceStandardMode);
                 setForceStandardMode(!forceStandardMode);
                 setIsInitialized(false);
                 setArResult({
@@ -686,8 +718,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                     ? 'Standard Mode Active'
                     : trackingQuality === 'standard'
                     ? 'Standard Analysis'
-                    : useFallbackMode
-                    ? 'AR Demo'
                     : 'AR Tracking'
                   : forceStandardMode
                   ? 'Standard Mode Ready'
@@ -754,7 +784,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
               <div className="flex justify-between items-center text-xs text-white/60 mb-4">
                 <span>Tracking: {arResult.matches_count || 0} features</span>
                 <span>Quality: {trackingQuality}</span>
-                <span>Mode: {forceStandardMode ? 'Standard' : trackingQuality === 'standard' ? 'Standard' : useFallbackMode ? 'Demo' : 'Live'}</span>
+                <span>Mode: {forceStandardMode ? 'Standard' : 'Live'}</span>
               </div>
               <div className="flex gap-3">
                 <Button
