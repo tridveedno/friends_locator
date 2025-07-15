@@ -25,7 +25,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const [isARActive, setIsARActive] = useState(false);
   const [frameCount, setFrameCount] = useState(0);
   const [userPhoto, setUserPhoto] = useState(null);
-  const [forceStandardMode, setForceStandardMode] = useState(false); // Toggle for standard mode
+  const [forceStandardMode, setForceStandardMode] = useState(false);
   const videoRef = useRef(null);
   const arCanvasRef = useRef(null);
   const canvasRef = useRef(null);
@@ -35,7 +35,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
 
-  // Handle user photo upload for non-camera mode
   const handleUserPhotoUpload = (event) => {
     const file = event.target.files[0];
     if (!file) {
@@ -46,8 +45,8 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       setError('Please upload a JPEG or PNG user photo');
       return;
     }
-    if (file.size > 100000) {
-      setError('User photo too large. Please upload an image under 100KB');
+    if (file.size > 500000) {
+      setError('User photo too large. Please upload an image under 500KB');
       return;
     }
     const reader = new FileReader();
@@ -60,7 +59,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     reader.readAsDataURL(file);
   };
 
-  // Setup video stream
   useEffect(() => {
     const setupVideo = async () => {
       if (!videoRef.current) return;
@@ -76,8 +74,8 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         };
       } catch (err) {
         console.error('Video stream error:', err.name, err.message);
-        setError('Failed to access camera. Please upload a user photo or try again.');
-        setUseFallbackMode(true);
+        setError('Failed to access camera. Please upload a user photo or switch to standard mode.');
+        setForceStandardMode(true); // Switch to standard mode if camera fails
       }
     };
 
@@ -92,7 +90,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     };
   }, [userPhoto, forceStandardMode]);
 
-  // Initialize when friendPhoto and either video or userPhoto are ready
   useEffect(() => {
     if (friendPhoto && !isInitialized && (videoRef.current || userPhoto || forceStandardMode)) {
       initializeARSystem();
@@ -144,7 +141,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const imageData = canvas.toDataURL('image/jpeg', 0.7);
+    const imageData = canvas.toDataURL('image/jpeg', 0.5); // Lower quality to reduce size
     console.log('✅ Captured frame length:', imageData.length, 'Preview:', imageData.substring(0, 50));
     return imageData.startsWith('data:image') ? imageData : null;
   };
@@ -152,7 +149,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const initializeARSystem = async () => {
     if (!friendPhoto) {
       console.error('Skipping initialization: friendPhoto missing');
-      setError('Please upload a friend photo before starting AR');
+      setError('Please upload a friend photo before starting');
       setUseFallbackMode(true);
       return;
     }
@@ -176,12 +173,12 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error('Failed to capture valid initial frame');
       }
 
-      if (friendPhoto.length > 150000 || initialFrame.length > 150000) {
+      if (friendPhoto.length > 500000 || initialFrame.length > 500000) {
         console.error('Image too large:', {
           friend_photo_length: friendPhoto.length,
           user_photo_length: initialFrame.length,
         });
-        throw new Error('Images too large. Please use smaller images.');
+        throw new Error('Images too large. Please use images under 500KB.');
       }
 
       console.log('Sending initialize request with:', {
@@ -219,7 +216,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       if (result.success) {
         setIsInitialized(true);
         setTrackingQuality(result.tracking_quality || 'good');
-        setUseFallbackMode(result.tracking_quality === 'standard' || useFallbackMode);
+        setUseFallbackMode(result.tracking_quality === 'standard');
         setArResult(result);
         if (result.tracking_quality !== 'standard') {
           startARTracking();
@@ -235,7 +232,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         setError(`Initialization failed: ${error.message}`);
       }
 
-      // Fallback: Retry with standard mode
+      // Fallback: Try standard mode
       try {
         console.log('Attempting fallback initialization in standard mode');
         const controller = new AbortController();
@@ -245,7 +242,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             friend_photo: friendPhoto,
-            user_photo: userPhoto || friendPhoto, // Use userPhoto or friendPhoto as fallback
+            user_photo: userPhoto || friendPhoto,
             mode: 'standard',
           }),
           signal: controller.signal,
@@ -260,21 +257,23 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         }
 
         const result = await response.json();
+        console.log('Fallback initialize response:', result);
         if (result.success) {
           setIsInitialized(true);
           setTrackingQuality('standard');
           setUseFallbackMode(true);
           setArResult(result);
         } else {
-          throw new Error(result.error || 'Fallback initialization failed');
+          throw new Error(result.error || 'Standard mode initialization failed');
         }
       } catch (fallbackError) {
-        console.error('Fallback initialization failed:', fallbackError);
+        console.error('Standard mode fallback failed:', fallbackError);
         if (fallbackError.name === 'AbortError') {
-          setError('Fallback request timed out. Please check your connection.');
+          setError('Standard mode request timed out. Please check your connection.');
         } else {
-          setError(`Unable to initialize: ${fallbackError.message}`);
+          setError(`Unable to initialize in standard mode: ${fallbackError.message}`);
         }
+        // Last resort: Demo mode
         setUseFallbackMode(true);
         setIsInitialized(true);
         setTrackingQuality('poor');
@@ -307,7 +306,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       setFrameCount(prev => prev + 1);
       try {
         let result;
-        if (useFallbackMode) {
+        if (useFallbackMode && trackingQuality !== 'standard') {
           result = {
             success: true,
             distance: 25 + Math.sin(frameCount * 0.1) * 10,
@@ -500,7 +499,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     if (arResult && onAnalysisComplete) {
       onAnalysisComplete({
         ...arResult,
-        method: useFallbackMode ? 'fallback_ar_tracking' : 'advanced_ar_tracking',
+        method: trackingQuality === 'standard' ? 'standard_analysis' : useFallbackMode ? 'fallback_ar_tracking' : 'advanced_ar_tracking',
         frame_count: frameCount,
         tracking_quality: trackingQuality,
       });
@@ -600,7 +599,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                   : isInitialized
                   ? trackingQuality === 'standard'
                     ? 'Standard Analysis'
-                    : useFallbackMode
+                    : useFallbackMode && trackingQuality !== 'standard'
                     ? 'AR Demo'
                     : 'AR Tracking'
                   : isARActive
