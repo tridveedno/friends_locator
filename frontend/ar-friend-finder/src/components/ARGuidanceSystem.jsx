@@ -80,7 +80,9 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     setIsProcessing(true);
     try {
       const initialFrame = captureCurrentFrame();
-      if (!initialFrame) throw new Error('Failed to capture initial frame');
+if (!initialFrame || !initialFrame.startsWith('data:image')) {
+  throw new Error('Camera frame is invalid or not ready');
+}
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
       const response = await fetch(`${backendUrl}/api/ar/initialize`, {
@@ -238,23 +240,30 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     setDistanceOpacity(Math.max(0.5, confidence));
   };
 
-  const captureCurrentFrame = () => {
-    if (!videoRef.current || !canvasRef.current) {
-      console.error('videoRef or canvasRef is not defined in captureCurrentFrame');
-      return null;
-    }
-    try {
-      const canvas = canvasRef.current;
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL('image/jpeg');
-    } catch (err) {
-      console.error('Error capturing frame:', err);
-      return null;
-    }
-  };
+ const captureCurrentFrame = () => {
+  if (!videoRef.current || !canvasRef.current) {
+    console.error('videoRef or canvasRef is not defined in captureCurrentFrame');
+    return null;
+  }
+
+  const video = videoRef.current;
+  const canvas = canvasRef.current;
+
+  if (video.videoWidth === 0 || video.videoHeight === 0) {
+    console.error('Camera not ready — video dimensions are zero');
+    return null;
+  }
+
+  canvas.width = Math.min(video.videoWidth, 640);
+  canvas.height = Math.min(video.videoHeight, 480);
+
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  const imageData = canvas.toDataURL('image/jpeg', 0.7); // compress slightly
+  console.log('Captured frame base64 size:', imageData.length);
+  return imageData.startsWith('data:image') ? imageData : null;
+};
 
   const drawAROverlays = (result) => {
     if (!arCanvasRef.current) {
