@@ -24,6 +24,8 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const [distanceOpacity, setDistanceOpacity] = useState(0.5);
   const [isARActive, setIsARActive] = useState(false);
   const [frameCount, setFrameCount] = useState(0);
+  const [userPhoto, setUserPhoto] = useState(null);
+  const [forceStandardMode, setForceStandardMode] = useState(false); // Toggle for standard mode
   const videoRef = useRef(null);
   const arCanvasRef = useRef(null);
   const canvasRef = useRef(null);
@@ -32,6 +34,31 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const processingInterval = 1000;
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
+
+  // Handle user photo upload for non-camera mode
+  const handleUserPhotoUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) {
+      setError('No user photo selected');
+      return;
+    }
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+      setError('Please upload a JPEG or PNG user photo');
+      return;
+    }
+    if (file.size > 100000) {
+      setError('User photo too large. Please upload an image under 100KB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64String = reader.result;
+      console.log('Uploaded user photo size:', base64String.length, 'Preview:', base64String.substring(0, 50));
+      setUserPhoto(base64String);
+    };
+    reader.onerror = () => setError('Failed to read user photo');
+    reader.readAsDataURL(file);
+  };
 
   // Setup video stream
   useEffect(() => {
@@ -42,19 +69,19 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           video: { facingMode: 'environment' },
         });
         videoRef.current.srcObject = stream;
-
         videoRef.current.onloadedmetadata = () => {
           videoRef.current.play();
           setIsARActive(true);
+          console.log('✅ Camera stream started successfully');
         };
       } catch (err) {
-        console.error('Video stream error:', err);
-        setError('Failed to access rear camera');
+        console.error('Video stream error:', err.name, err.message);
+        setError('Failed to access camera. Please upload a user photo or try again.');
         setUseFallbackMode(true);
       }
     };
 
-    setupVideo();
+    if (!userPhoto && !forceStandardMode) setupVideo();
 
     return () => {
       if (videoRef.current && videoRef.current.srcObject) {
@@ -63,17 +90,18 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         tracks.forEach(track => track.stop());
       }
     };
-  }, []);
+  }, [userPhoto, forceStandardMode]);
 
-  // Initialize when video and friendPhoto are ready
+  // Initialize when friendPhoto and either video or userPhoto are ready
   useEffect(() => {
-    if (friendPhoto && !isInitialized && videoRef.current) {
+    if (friendPhoto && !isInitialized && (videoRef.current || userPhoto || forceStandardMode)) {
       initializeARSystem();
     }
     return () => cleanupAR();
-  }, [friendPhoto, isInitialized]);
- 
+  }, [friendPhoto, userPhoto, isInitialized, forceStandardMode]);
+
   const waitForCameraReady = async () => {
+    if (userPhoto || forceStandardMode) return;
     let attempts = 0;
     while (
       (!videoRef.current || videoRef.current.videoWidth === 0) &&
@@ -83,81 +111,22 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       await new Promise(res => setTimeout(res, 300));
       attempts++;
     }
-  };
-
-  const initializeARSystem = async () => {
-    if (!videoRef.current || !friendPhoto) {
-      console.log('Skipping initialization: videoRef or friendPhoto missing');
-      return;
-    }
-
-    setIsProcessing(true);
-
-    try {
-      await waitForCameraReady(); 
-      let initialFrame = captureCurrentFrame();
-      let attempts = 0;
-
-      while ((!initialFrame || initialFrame.length < 10000) && attempts < 5) {
-        await new Promise(res => setTimeout(res, 300));
-        initialFrame = captureCurrentFrame();
-        attempts++;
-      }
-
-      if (!initialFrame || !initialFrame.startsWith('data:image')) {
-        throw new Error('Camera frame is invalid or not ready');
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const response = await fetch(`${backendUrl}/api/ar/initialize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          friend_photo: friendPhoto,
-          user_photo: initialFrame,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) throw new Error(`Backend error: ${response.status}`);
-      const result = await response.json();
-
-      if (result.success) {
-        setIsInitialized(true);
-        setTrackingQuality('good');
-        setUseFallbackMode(false);
-        setArResult(result);
-        startARTracking();
-      } else {
-        throw new Error(result.error || 'Failed to initialize AR system');
-      }
-    } catch (error) {
-      console.error('AR initialization error:', error);
-      setError(`Initialization failed: ${error.message}`);
-      setUseFallbackMode(true);
-      setIsInitialized(true);
-      setTrackingQuality('fair');
-      setArResult({
-        success: true,
-        distance: 25,
-        angle: 0,
-        direction: 'forward',
-        instruction: 'Walk forward (Demo Mode)',
-        confidence: 0.8,
-        matches_count: 15,
-        tracking_quality: 'fair',
-      });
-      startARTracking();
-    } finally {
-      setIsProcessing(false);
+    if (!videoRef.current || videoRef.current.videoWidth === 0) {
+      console.error('Camera not ready after 10 attempts');
+      throw new Error('Camera not ready');
     }
   };
 
   const captureCurrentFrame = () => {
+    if (userPhoto) {
+      console.log('Using uploaded user photo:', userPhoto.substring(0, 50));
+      return userPhoto;
+    }
     if (!videoRef.current || !canvasRef.current) {
-      console.error('videoRef or canvasRef is not defined in captureCurrentFrame');
+      console.error('captureCurrentFrame: videoRef or canvasRef missing', {
+        videoRef: !!videoRef.current,
+        canvasRef: !!canvasRef.current,
+      });
       return null;
     }
 
@@ -176,13 +145,159 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     const imageData = canvas.toDataURL('image/jpeg', 0.7);
-    console.log('✅ Captured frame length:', imageData.length);
+    console.log('✅ Captured frame length:', imageData.length, 'Preview:', imageData.substring(0, 50));
     return imageData.startsWith('data:image') ? imageData : null;
+  };
+
+  const initializeARSystem = async () => {
+    if (!friendPhoto) {
+      console.error('Skipping initialization: friendPhoto missing');
+      setError('Please upload a friend photo before starting AR');
+      setUseFallbackMode(true);
+      return;
+    }
+
+    setIsProcessing(true);
+
+    try {
+      if (!userPhoto && !forceStandardMode) await waitForCameraReady();
+      let initialFrame = captureCurrentFrame();
+      let attempts = 0;
+
+      while ((!initialFrame || initialFrame.length < 10000) && attempts < 5 && !userPhoto && !forceStandardMode) {
+        console.log('⏳ Retrying captureCurrentFrame, attempt:', attempts + 1);
+        await new Promise(res => setTimeout(res, 300));
+        initialFrame = captureCurrentFrame();
+        attempts++;
+      }
+
+      if (!initialFrame || !initialFrame.startsWith('data:image')) {
+        console.error('Invalid initial frame:', initialFrame ? initialFrame.substring(0, 50) : 'null');
+        throw new Error('Failed to capture valid initial frame');
+      }
+
+      if (friendPhoto.length > 150000 || initialFrame.length > 150000) {
+        console.error('Image too large:', {
+          friend_photo_length: friendPhoto.length,
+          user_photo_length: initialFrame.length,
+        });
+        throw new Error('Images too large. Please use smaller images.');
+      }
+
+      console.log('Sending initialize request with:', {
+        mode: forceStandardMode ? 'standard' : 'ar',
+        friend_photo_length: friendPhoto.length,
+        user_photo_length: initialFrame.length,
+        friend_photo_preview: friendPhoto.substring(0, 50),
+        user_photo_preview: initialFrame.substring(0, 50),
+      });
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const response = await fetch(`${backendUrl}/api/ar/initialize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          friend_photo: friendPhoto,
+          user_photo: initialFrame,
+          mode: forceStandardMode ? 'standard' : 'ar',
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      console.log('Initialize response status:', response.status, 'URL:', `${backendUrl}/api/ar/initialize`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Initialize response error:', errorText);
+        throw new Error(`Backend error: ${response.status} - ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('Initialize response:', result);
+
+      if (result.success) {
+        setIsInitialized(true);
+        setTrackingQuality(result.tracking_quality || 'good');
+        setUseFallbackMode(result.tracking_quality === 'standard' || useFallbackMode);
+        setArResult(result);
+        if (result.tracking_quality !== 'standard') {
+          startARTracking();
+        }
+      } else {
+        throw new Error(result.error || 'Failed to initialize system');
+      }
+    } catch (error) {
+      console.error('Initialization error:', error);
+      if (error.name === 'AbortError') {
+        setError('The request took too long. Please check your connection and try again.');
+      } else {
+        setError(`Initialization failed: ${error.message}`);
+      }
+
+      // Fallback: Retry with standard mode
+      try {
+        console.log('Attempting fallback initialization in standard mode');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const response = await fetch(`${backendUrl}/api/ar/initialize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            friend_photo: friendPhoto,
+            user_photo: userPhoto || friendPhoto, // Use userPhoto or friendPhoto as fallback
+            mode: 'standard',
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        console.log('Fallback initialize response status:', response.status);
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Fallback initialize response error:', errorText);
+          throw new Error(`Fallback backend error: ${response.status} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        if (result.success) {
+          setIsInitialized(true);
+          setTrackingQuality('standard');
+          setUseFallbackMode(true);
+          setArResult(result);
+        } else {
+          throw new Error(result.error || 'Fallback initialization failed');
+        }
+      } catch (fallbackError) {
+        console.error('Fallback initialization failed:', fallbackError);
+        if (fallbackError.name === 'AbortError') {
+          setError('Fallback request timed out. Please check your connection.');
+        } else {
+          setError(`Unable to initialize: ${fallbackError.message}`);
+        }
+        setUseFallbackMode(true);
+        setIsInitialized(true);
+        setTrackingQuality('poor');
+        setArResult({
+          success: true,
+          distance: 25,
+          angle: 0,
+          direction: 'forward',
+          instruction: 'Walk forward (Demo Mode)',
+          confidence: 0.8,
+          matches_count: 15,
+          tracking_quality: 'poor',
+        });
+        startARTracking();
+      }
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const startARTracking = () => {
     const processFrame = async () => {
-      if (!isInitialized || !videoRef.current) return;
+      if (!isInitialized || (!videoRef.current && !userPhoto)) return;
       const currentTime = Date.now();
       if (currentTime - lastProcessTime.current < processingInterval) {
         animationFrameRef.current = requestAnimationFrame(processFrame);
@@ -198,7 +313,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             distance: 25 + Math.sin(frameCount * 0.1) * 10,
             angle: 15 + Math.cos(frameCount * 0.05) * 20,
             direction: Math.sin(frameCount * 0.03) > 0 ? 'right' : 'left',
-            instruction: 'Walk forward and follow the arrow (Demo Mode)',
+            instruction: 'Walk forward and follow the arrow (Fallback Mode)',
             confidence: 0.8 + Math.random() * 0.2,
             matches_count: 15 + Math.floor(Math.random() * 10),
             tracking_quality: 'fair',
@@ -243,7 +358,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             distance: 25,
             angle: 0,
             direction: 'forward',
-            instruction: 'Walk forward (Demo Mode)',
+            instruction: 'Walk forward (Fallback Mode)',
             confidence: 0.8,
             matches_count: 15,
             tracking_quality: 'fair',
@@ -278,7 +393,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     }
     rotation = Math.max(-90, Math.min(90, rotation));
     setTargetRotation(rotation);
-    setCurrentRotation(rotation); // Update currentRotation
+    setCurrentRotation(rotation);
     let scale = 1.0;
     if (distance < 10) {
       scale = 1.5;
@@ -395,6 +510,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const getTrackingStatusColor = () => {
     switch (trackingQuality) {
       case 'good':
+      case 'standard':
         return 'bg-green-500';
       case 'fair':
         return 'bg-yellow-500';
@@ -408,6 +524,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const getTrackingIcon = () => {
     switch (trackingQuality) {
       case 'good':
+      case 'standard':
         return <Wifi className="w-3 h-3" />;
       case 'fair':
         return <Target className="w-3 h-3" />;
@@ -437,6 +554,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         playsInline
         muted
         autoPlay
+        style={{ display: userPhoto || forceStandardMode ? 'none' : 'block' }}
       />
       <canvas
         ref={arCanvasRef}
@@ -455,6 +573,22 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             <X className="w-4 h-4" />
           </Button>
           <div className="flex items-center gap-2">
+            {!isARActive && !userPhoto && !forceStandardMode && (
+              <input
+                type="file"
+                accept="image/jpeg,image/png"
+                onChange={handleUserPhotoUpload}
+                className="text-white text-sm bg-black/50 px-3 py-1 rounded-full"
+              />
+            )}
+            <Button
+              onClick={() => setForceStandardMode(!forceStandardMode)}
+              variant="outline"
+              size="sm"
+              className="bg-black/50 border-white/30 text-white hover:bg-black/70"
+            >
+              {forceStandardMode ? 'Switch to AR Mode' : 'Switch to Standard Mode'}
+            </Button>
             <div className="flex items-center bg-black/50 px-2 py-1 rounded-full">
               <div className={`w-2 h-2 rounded-full mr-2 ${getTrackingStatusColor()}`}></div>
               {getTrackingIcon()}
@@ -464,11 +598,15 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                 {isProcessing
                   ? 'Initializing...'
                   : isInitialized
-                  ? useFallbackMode
+                  ? trackingQuality === 'standard'
+                    ? 'Standard Analysis'
+                    : useFallbackMode
                     ? 'AR Demo'
                     : 'AR Tracking'
                   : isARActive
                   ? 'Camera Ready'
+                  : userPhoto
+                  ? 'User Photo Ready'
                   : 'Starting...'}
               </span>
             </div>
@@ -514,7 +652,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
               <div className="flex justify-between items-center text-xs text-white/60 mb-4">
                 <span>Tracking: {arResult.matches_count || 0} features</span>
                 <span>Quality: {trackingQuality}</span>
-                <span>Mode: {useFallbackMode ? 'Demo' : 'Live'}</span>
+                <span>Mode: {trackingQuality === 'standard' ? 'Standard' : useFallbackMode ? 'Demo' : 'Live'}</span>
               </div>
               <div className="flex gap-3">
                 <Button
@@ -544,7 +682,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                 </div>
               </div>
               <div className="text-white text-xl font-semibold mb-3">
-                {isInitialized ? 'Processing frame...' : 'Initializing AR system...'}
+                {isInitialized ? 'Processing frame...' : 'Initializing system...'}
               </div>
               <div className="text-white/70 text-sm">
                 {isInitialized ? 'Tracking landmarks in real-time' : 'Analyzing landmark features and calibrating'}
@@ -556,7 +694,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           <div className="absolute inset-0 bg-black/80 flex items-center justify-center pointer-events-auto backdrop-blur-sm">
             <div className="bg-red-900/90 rounded-xl p-6 text-center max-w-sm mx-4 border border-red-500/30">
               <div className="text-white text-lg font-semibold mb-3">
-                AR System Error
+                System Error
               </div>
               <div className="text-white/90 text-sm mb-4 leading-relaxed">
                 {error}
@@ -573,7 +711,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             </div>
           </div>
         )}
-        {isARActive && !isInitialized && !isProcessing && !error && (
+        {isARActive && !isInitialized && !isProcessing && !error && !forceStandardMode && (
           <div className="absolute bottom-20 left-4 right-4">
             <div className="bg-black/80 rounded-xl p-6 text-center backdrop-blur-sm border border-white/20">
               <div className="text-white text-base mb-3">
