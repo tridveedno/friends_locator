@@ -36,23 +36,24 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
 
-  const resizeImage = (imageSrc, maxWidth, maxHeight, callback) => {
+  const resizeImage = (imageSrc, maxWidth, maxHeight, quality, callback) => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
       let width = img.width;
       let height = img.height;
-      if (width > maxWidth || height > maxHeight) {
-        const ratio = Math.min(maxWidth / width, maxHeight / height);
-        width = width * ratio;
-        height = height * ratio;
-      }
+      const isHighRes = width * height > 1000000; // >1MP
+      const targetWidth = isHighRes ? 160 : maxWidth; // 160x120 for high-res
+      const targetHeight = isHighRes ? 120 : maxHeight;
+      const ratio = Math.min(targetWidth / width, targetHeight / height);
+      width = width * ratio;
+      height = height * ratio;
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, width, height);
-      const resizedData = canvas.toDataURL('image/jpeg', 0.1); // Lowered quality to 0.1
-      console.log('Resized image dimensions:', width, 'x', height, 'Size:', resizedData.length, 'bytes');
+      const resizedData = canvas.toDataURL('image/jpeg', quality);
+      console.log('Resized image dimensions:', width, 'x', height, 'Source:', img.width, 'x', img.height, 'Size:', resizedData.length, 'bytes');
       callback(resizedData);
     };
     img.onerror = () => {
@@ -72,7 +73,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       setError('Please upload a JPEG or PNG user photo');
       return;
     }
-    if (file.size > 300000) { // Reduced from 500KB to 300KB
+    if (file.size > 300000) {
       setError('User photo too large. Please upload an image under 300KB.');
       console.error('Upload rejected: File size', file.size, 'bytes');
       setShowCompressionPrompt(true);
@@ -82,7 +83,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     reader.onload = () => {
       const base64String = reader.result;
       console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
-      resizeImage(base64String, 240, 180, (resizedData) => { // Reduced to 240x180
+      resizeImage(base64String, 240, 180, 0.05, (resizedData) => {
         if (resizedData) {
           setUserPhoto(resizedData);
           console.log('Resized user photo size:', resizedData.length, 'bytes');
@@ -100,7 +101,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       if (!videoRef.current) return;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
+          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, // Lower ideal resolution
         });
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
@@ -171,13 +172,14 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       return null;
     }
 
-    canvas.width = Math.min(video.videoWidth, 240); // Reduced from 320
-    canvas.height = Math.min(video.videoHeight, 180); // Reduced from 240
+    const isHighRes = video.videoWidth * video.videoHeight > 1000000;
+    canvas.width = Math.min(video.videoWidth, isHighRes ? 160 : 240); // 160x120 for high-res
+    canvas.height = Math.min(video.videoHeight, isHighRes ? 120 : 180);
 
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const imageData = canvas.toDataURL('image/jpeg', 0.1); // Lowered quality to 0.1
+    const imageData = canvas.toDataURL('image/jpeg', 0.05); // Lowered to 0.05
     console.log('✅ Captured frame length:', imageData.length, 'bytes, Dimensions:', canvas.width, 'x', canvas.height);
     return imageData.startsWith('data:image') ? imageData : null;
   };
@@ -209,12 +211,12 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error('Failed to capture valid initial frame');
       }
 
-      if (friendPhoto.length > 2000000 || initialFrame.length > 2000000) { // Increased to 2M chars (~1.5MB)
+      if (friendPhoto.length > 2500000 || initialFrame.length > 2500000) { // Increased to 2.5M chars (~1.9MB)
         console.error('Image too large:', {
           friend_photo_length: friendPhoto.length,
           user_photo_length: initialFrame.length,
         });
-        throw new Error('Images too large. Please use images under 1.5MB.');
+        throw new Error('Images too large. Please use images under 1.9MB.');
       }
 
       console.log('Sending initialize request with:', {
@@ -739,7 +741,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
               {showCompressionPrompt && (
                 <div className="text-white/90 text-sm mb-4 leading-relaxed">
                   <AlertTriangle className="w-5 h-5 text-yellow-400 inline-block mr-2" />
-                  Please compress your image to under 300KB using a tool like{' '}
+                  Your image is too large. For iPhone users, try saving photos in "Most Compatible" format (Settings > Camera > Formats) or compress to under 300KB using{' '}
                   <a
                     href="https://tinyjpg.com"
                     target="_blank"
@@ -770,7 +772,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                 Point your camera at the same landmark visible in your friend's photo
               </div>
               <div className="text-white/70 text-sm">
-                The system will automatically detect and track the landmark for precise navigation
+                For best results, use a low-resolution photo (e.g., 640x480) or compress images to under 300KB
               </div>
             </div>
           </div>
