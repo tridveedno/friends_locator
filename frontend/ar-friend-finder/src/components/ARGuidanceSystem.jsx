@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye, AlertTriangle, Image as ImageIcon } from 'lucide-react';
+import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button.jsx';
 
 const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
@@ -143,6 +143,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   useEffect(() => {
     if (processedFriendPhoto && !isInitialized) {
+      console.log('Triggering initializeARSystem with forceStandardMode:', forceStandardMode);
       initializeARSystem();
     }
     return () => cleanupAR();
@@ -209,6 +210,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     }
 
     setIsProcessing(true);
+    console.log('Initializing AR system with mode:', forceStandardMode ? 'standard' : 'ar', 'retryCount:', retryCount);
 
     try {
       let initialFrame = forceStandardMode ? userPhoto : captureCurrentFrame();
@@ -248,23 +250,29 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 20000);
-      const response = await fetch(`${backendUrl}/api/ar/initialize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          friend_photo: processedFriendPhoto,
-          user_photo: initialFrame,
-          mode: forceStandardMode ? 'standard' : 'ar',
-        }),
-        signal: controller.signal,
-      });
+      let response;
+      try {
+        response = await fetch(`${backendUrl}/api/ar/initialize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            friend_photo: processedFriendPhoto,
+            user_photo: initialFrame,
+            mode: forceStandardMode ? 'standard' : 'ar',
+          }),
+          signal: controller.signal,
+        });
+      } catch (fetchError) {
+        console.error('Fetch error:', fetchError.name, fetchError.message);
+        throw new Error(`Network error: ${fetchError.message}. Check if backend is running at ${backendUrl}.`);
+      }
       clearTimeout(timeoutId);
 
       console.log('Initialize response status:', response.status, 'URL:', `${backendUrl}/api/ar/initialize`);
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Initialize response error:', errorText);
-        throw new Error(`Backend error: ${response.status} - ${errorText}`);
+        console.error('Initialize response error:', response.status, errorText);
+        throw new Error(`Backend error: ${response.status} - ${errorText}. URL: ${backendUrl}/api/ar/initialize`);
       }
 
       const result = await response.json();
@@ -297,32 +305,49 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error(result.error || 'Failed to initialize system');
       }
     } catch (error) {
-      console.error('Initialization error:', error);
-      if (error.name === 'AbortError') {
-        setError('The request took too long. Please check your connection and try again.');
-      } else {
-        setError(`Initialization failed: ${error.message}`);
+      console.error('Initialization error:', error.message, 'URL attempted:', backendUrl);
+      if (forceStandardMode) {
+        if (error.name === 'AbortError') {
+          setError('Request timed out. Please check your internet connection and backend server.');
+        } else {
+          setError(`Failed to connect to backend: ${error.message}. Please ensure the server is running.`);
+        }
         setShowCompressionPrompt(error.message.includes('Images too large'));
-      }
-      if (forceStandardMode && retryCount < maxRetries) {
-        setRetryCount(prev => prev + 1);
-        setTimeout(() => {
-          setIsInitialized(false);
-          setError(null);
-          initializeARSystem();
-        }, 2000);
-      } else if (forceStandardMode) {
+        if (retryCount < maxRetries) {
+          setRetryCount(prev => prev + 1);
+          setTimeout(() => {
+            setIsInitialized(false);
+            setError(null);
+            console.log('Retrying initialization, attempt:', retryCount + 1);
+            initializeARSystem();
+          }, 2000);
+        } else {
+          setIsInitialized(true);
+          setTrackingQuality('poor');
+          setArResult({
+            success: false,
+            distance: 0,
+            angle: 0,
+            direction: null,
+            instruction: 'Unable to connect to backend. Please try again later.',
+            confidence: 0,
+            matches_count: 0,
+            tracking_quality: 'poor',
+          });
+        }
+      } else {
+        setUseFallbackMode(true);
         setIsInitialized(true);
-        setTrackingQuality('poor');
+        setTrackingQuality('fair');
         setArResult({
           success: true,
-          distance: 50,
+          distance: 25,
           angle: 0,
           direction: 'forward',
-          instruction: 'No clear direction, please upload new photos',
-          confidence: 0.3,
-          matches_count: 0,
-          tracking_quality: 'poor',
+          instruction: 'Walk forward (AR Fallback Mode)',
+          confidence: 0.8,
+          matches_count: 15,
+          tracking_quality: 'fair',
         });
       }
     } finally {
@@ -352,7 +377,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             distance: 25 + Math.sin(frameCount * 0.1) * 10,
             angle: 15 + Math.cos(frameCount * 0.05) * 20,
             direction: Math.sin(frameCount * 0.03) > 0 ? 'right' : 'left',
-            instruction: 'Walk forward and follow the arrow (Fallback Mode)',
+            instruction: 'Walk forward and follow the arrow (AR Fallback Mode)',
             confidence: 0.8 + Math.random() * 0.2,
             matches_count: 15 + Math.floor(Math.random() * 10),
             tracking_quality: 'fair',
@@ -397,7 +422,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             distance: 25,
             angle: 0,
             direction: 'forward',
-            instruction: 'Walk forward (Fallback Mode)',
+            instruction: 'Walk forward (AR Fallback Mode)',
             confidence: 0.8,
             matches_count: 15,
             tracking_quality: 'fair',
@@ -512,6 +537,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   };
 
   const handleRetry = () => {
+    console.log('Retry triggered, resetting state');
     setArResult({
       success: false,
       distance: 50,
@@ -533,6 +559,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     setUseFallbackMode(false);
     setRetryCount(0);
     setTimeout(() => {
+      console.log('Retrying initializeARSystem with forceStandardMode:', forceStandardMode);
       initializeARSystem();
     }, 500);
   };
@@ -624,6 +651,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             )}
             <Button
               onClick={() => {
+                console.log('Switching mode, current forceStandardMode:', forceStandardMode, 'new value:', !forceStandardMode);
                 setForceStandardMode(!forceStandardMode);
                 setIsInitialized(false);
                 setArResult({
