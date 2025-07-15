@@ -35,6 +35,32 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
 
+  const resizeImage = (imageSrc, maxWidth, maxHeight, callback) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
+      if (width > maxWidth || height > maxHeight) {
+        const ratio = Math.min(maxWidth / width, maxHeight / height);
+        width = width * ratio;
+        height = height * ratio;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      const resizedData = canvas.toDataURL('image/jpeg', 0.2);
+      console.log('Resized image dimensions:', width, 'x', height, 'Size:', resizedData.length, 'bytes');
+      callback(resizedData);
+    };
+    img.onerror = () => {
+      console.error('Failed to load image for resizing');
+      callback(null);
+    };
+    img.src = imageSrc;
+  };
+
   const handleUserPhotoUpload = (event) => {
     const file = event.target.files[0];
     if (!file) {
@@ -54,7 +80,14 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     reader.onload = () => {
       const base64String = reader.result;
       console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
-      setUserPhoto(base64String);
+      resizeImage(base64String, 320, 240, (resizedData) => {
+        if (resizedData) {
+          setUserPhoto(resizedData);
+          console.log('Resized user photo size:', resizedData.length, 'bytes');
+        } else {
+          setError('Failed to resize user photo');
+        }
+      });
     };
     reader.onerror = () => setError('Failed to read user photo');
     reader.readAsDataURL(file);
@@ -136,14 +169,14 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       return null;
     }
 
-    canvas.width = Math.min(video.videoWidth, 480); // Reduced from 640
-    canvas.height = Math.min(video.videoHeight, 360); // Reduced from 480
+    canvas.width = Math.min(video.videoWidth, 320); // Reduced from 480
+    canvas.height = Math.min(video.videoHeight, 240); // Reduced from 360
 
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const imageData = canvas.toDataURL('image/jpeg', 0.3); // Lowered quality from 0.5
-    console.log('✅ Captured frame length:', imageData.length, 'bytes, Preview:', imageData.substring(0, 50));
+    const imageData = canvas.toDataURL('image/jpeg', 0.2); // Lowered quality from 0.3
+    console.log('✅ Captured frame length:', imageData.length, 'bytes, Dimensions:', canvas.width, 'x', canvas.height);
     return imageData.startsWith('data:image') ? imageData : null;
   };
 
@@ -174,12 +207,12 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error('Failed to capture valid initial frame');
       }
 
-      if (friendPhoto.length > 1000000 || initialFrame.length > 1000000) {
+      if (friendPhoto.length > 1500000 || initialFrame.length > 1500000) {
         console.error('Image too large:', {
           friend_photo_length: friendPhoto.length,
           user_photo_length: initialFrame.length,
         });
-        throw new Error('Images too large. Please use images under 750KB.');
+        throw new Error('Images too large. Please use images under 1.1MB.');
       }
 
       console.log('Sending initialize request with:', {
