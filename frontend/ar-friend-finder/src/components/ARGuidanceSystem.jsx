@@ -37,8 +37,8 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const processingInterval = 1000;
   const maxRetries = 2;
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
-  console.log('Backend URL loaded:', backendUrl);
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://<your-ngrok-id>.ngrok-free.app';
+  console.log('Backend URL:', backendUrl);
 
   const resizeImage = (imageSrc, maxWidth, maxHeight, quality, callback) => {
     const img = new Image();
@@ -66,7 +66,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   useEffect(() => {
     if (friendPhoto) {
-      resizeImage(friendPhoto, 160, 120, 0.05, (resizedData) => {
+      resizeImage(friendPhoto, 320, 240, 0.05, (resizedData) => {
         if (resizedData) {
           setProcessedFriendPhoto(resizedData);
           console.log('Processed friend photo size:', resizedData.length, 'bytes');
@@ -98,10 +98,34 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     reader.onload = () => {
       const base64String = reader.result;
       console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
-      resizeImage(base64String, 160, 120, 0.05, (resizedData) => {
+      resizeImage(base64String, 320, 240, 0.05, (resizedData) => {
         if (resizedData) {
-          setUserPhoto(resizedData);
-          console.log('Resized user photo size:', resizedData.length, 'bytes');
+          // Check image quality
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, img.width, img.height).data;
+            let sum = 0, sumSq = 0, count = imageData.length;
+            for (let i = 0; i < count; i++) {
+              sum += imageData[i];
+              sumSq += imageData[i] * imageData[i];
+            }
+            const mean = sum / count;
+            const variance = (sumSq / count) - (mean * mean);
+            console.log('User photo quality: mean=', mean.toFixed(2), 'variance=', variance.toFixed(2));
+            if (mean < 10 || variance < 100) {
+              setError('User photo is too dark or lacks distinct features. Please upload a clearer image.');
+              setShowCompressionPrompt(true);
+              return;
+            }
+            setUserPhoto(resizedData);
+            console.log('Resized user photo size:', resizedData.length, 'bytes');
+          };
+          img.src = resizedData;
         } else {
           setError('Failed to resize user photo');
         }
@@ -141,7 +165,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
     return () => {
       if (videoRef.current && videoRef.current.srcObject) {
-        console.log('Cleaning up video stream');
+        console.log('Stopping video stream');
         const stream = videoRef.current.srcObject;
         const tracks = stream.getTracks();
         tracks.forEach(track => track.stop());
@@ -204,13 +228,27 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       return null;
     }
 
-    canvas.width = 160;
-    canvas.height = 120;
+    canvas.width = 320;
+    canvas.height = 240;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageData = canvas.toDataURL('image/jpeg', 0.05);
-    console.log('✅ Captured frame length:', imageData.length, 'bytes, Dimensions:', canvas.width, 'x', canvas.height);
-    return imageData.startsWith('data:image') ? imageData : null;
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let sum = 0, sumSq = 0, count = imageData.length;
+    for (let i = 0; i < count; i++) {
+      sum += imageData[i];
+      sumSq += imageData[i] * imageData[i];
+    }
+    const mean = sum / count;
+    const variance = (sumSq / count) - (mean * mean);
+    console.log('Captured frame quality: mean=', mean.toFixed(2), 'variance=', variance.toFixed(2));
+    if (mean < 10 || variance < 100) {
+      console.error('Captured frame too dark or lacks features');
+      setError('Camera frame is too dark or lacks distinct features. Please point at a well-lit landmark.');
+      return null;
+    }
+    const frameData = canvas.toDataURL('image/jpeg', 0.05);
+    console.log('✅ Captured frame length:', frameData.length, 'bytes, Dimensions:', canvas.width, 'x', canvas.height);
+    return frameData.startsWith('data:image') ? frameData : null;
   };
 
   const initializeARSystem = async () => {
@@ -253,7 +291,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           friend_photo_length: processedFriendPhoto.length,
           user_photo_length: initialFrame.length,
         });
-        throw new Error(`Images too large (${(Math.max(processedFriendPhoto.length, initialFrame.length) / 1000000).toFixed(2)}MB). Please use images under 3.8MB.`);
+        throw new Error(`Images too large (${(Math.max(processedFriendPhoto.length, initialFrame.length) / 1000000).toFixed(2)}MB). Please use images under 5MB.`);
       }
 
       console.log('Sending initialize request:', {
@@ -272,7 +310,10 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       try {
         response = await fetch(`${backendUrl}/api/ar/initialize`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Origin': window.location.origin,
+          },
           body: JSON.stringify({
             friend_photo: processedFriendPhoto,
             user_photo: initialFrame,
@@ -280,6 +321,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           }),
           signal: controller.signal,
         });
+        clearTimeout(timeoutId);
       } catch (fetchError) {
         console.error('Fetch error details:', {
           error: fetchError.name,
@@ -289,7 +331,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         });
         throw new Error(`Network error: ${fetchError.message}. Check if backend is running at ${backendUrl}.`);
       }
-      clearTimeout(timeoutId);
 
       console.log('Initialize response:', { status: response.status, url: `${backendUrl}/api/ar/initialize` });
       if (!response.ok) {
@@ -336,7 +377,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     } catch (error) {
       console.error('Initialization error:', {
         message: error.message,
-        url: `${backendUrl}/api/ar/initialize`,
+        url: backendUrl,
         mode: forceStandardMode ? 'standard' : 'ar',
       });
       setError(`Failed to initialize ${forceStandardMode ? 'Standard' : 'AR'} mode: ${error.message}`);
@@ -356,7 +397,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           distance: 0,
           angle: 0,
           direction: null,
-          instruction: `Failed to connect to backend: ${error.message}`,
+          instruction: `Failed to initialize: ${error.message}`,
           confidence: 0,
           matches_count: 0,
           tracking_quality: 'poor',
@@ -413,19 +454,22 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         try {
           response = await fetch(`${backendUrl}/api/ar/track`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'Origin': window.location.origin,
+            },
             body: JSON.stringify({ current_frame: currentFrame }),
             signal: controller.signal,
           });
+          clearTimeout(timeoutId);
         } catch (fetchError) {
           console.error('Track fetch error:', {
             error: fetchError.name,
             message: fetchError.message,
             url: `${backendUrl}/api/ar/track`,
           });
-          throw new Error(`Network error: ${fetchError.message}`);
+          throw new Error(`Tracking error: ${fetchError.message}`);
         }
-        clearTimeout(timeoutId);
 
         console.log('Track response:', { status: response.status, url: `${backendUrl}/api/ar/track` });
         if (!response.ok) {
@@ -455,7 +499,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       } catch (error) {
         console.error('Frame processing error:', {
           message: error.message,
-          url: `${backendUrl}/api/ar/track`,
+          url: backendUrl,
           frame_count: frameCount,
         });
         setError(`AR tracking error: ${error.message}`);
@@ -838,7 +882,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
               {showCompressionPrompt && (
                 <div className="text-white/90 text-sm mb-4 leading-relaxed">
                   <AlertTriangle className="w-5 h-5 text-yellow-400 inline-block mr-2" />
-                  Your image is too large. For iPhone users, try saving photos in "Most Compatible" format (Settings > Camera > Formats) or compress to under 5MB using{' '}
+                  Your image is too large or lacks features. For iPhone users, try saving photos in "Most Compatible" format (Settings > Camera > Formats) or compress to under 5MB using{' '}
                   <a
                     href="https://tinyjpg.com"
                     target="_blank"
@@ -869,7 +913,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                 Upload Your Photo
               </div>
               <div className="text-white/90 text-sm mb-4 leading-relaxed">
-                Please upload a photo of the same landmark as your friend’s photo for standard mode analysis.
+                Please upload a photo of the same landmark as your friend’s photo for standard mode analysis. Ensure it’s well-lit with distinct features.
               </div>
               <input
                 type="file"
@@ -887,7 +931,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                 Point your camera at the same landmark visible in your friend's photo
               </div>
               <div className="text-white/70 text-sm">
-                For best results, use photos under 5MB or adjust your camera to a lower resolution (e.g., 640x480)
+                For best results, use a well-lit area with distinct landmarks. Avoid dark or uniform scenes.
               </div>
             </div>
           </div>
