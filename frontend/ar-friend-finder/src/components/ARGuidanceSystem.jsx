@@ -240,7 +240,7 @@ if (!initialFrame || !initialFrame.startsWith('data:image')) {
     setDistanceOpacity(Math.max(0.5, confidence));
   };
 
- const captureCurrentFrame = () => {
+const captureCurrentFrame = () => {
   if (!videoRef.current || !canvasRef.current) {
     console.error('videoRef or canvasRef is not defined in captureCurrentFrame');
     return null;
@@ -260,8 +260,10 @@ if (!initialFrame || !initialFrame.startsWith('data:image')) {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  const imageData = canvas.toDataURL('image/jpeg', 0.7); // compress slightly
-  console.log('Captured frame base64 size:', imageData.length);
+  const imageData = canvas.toDataURL('image/jpeg', 0.7);
+  console.log('✅ Captured frame data length:', imageData.length);
+  console.log('✅ Sample frame data:', imageData.slice(0, 30));
+
   return imageData.startsWith('data:image') ? imageData : null;
 };
 
