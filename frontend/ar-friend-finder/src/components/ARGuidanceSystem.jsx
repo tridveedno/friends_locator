@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye } from 'lucide-react';
+import { ArrowUp, Navigation, X, Target, Wifi, WifiOff, Compass, MapPin, Eye, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button.jsx';
 
 const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
@@ -26,6 +26,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const [frameCount, setFrameCount] = useState(0);
   const [userPhoto, setUserPhoto] = useState(null);
   const [forceStandardMode, setForceStandardMode] = useState(false);
+  const [showCompressionPrompt, setShowCompressionPrompt] = useState(false);
   const videoRef = useRef(null);
   const arCanvasRef = useRef(null);
   const canvasRef = useRef(null);
@@ -50,7 +51,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, width, height);
-      const resizedData = canvas.toDataURL('image/jpeg', 0.2);
+      const resizedData = canvas.toDataURL('image/jpeg', 0.1); // Lowered quality to 0.1
       console.log('Resized image dimensions:', width, 'x', height, 'Size:', resizedData.length, 'bytes');
       callback(resizedData);
     };
@@ -71,16 +72,17 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       setError('Please upload a JPEG or PNG user photo');
       return;
     }
-    if (file.size > 500000) {
-      setError('User photo too large. Please upload an image under 500KB');
+    if (file.size > 300000) { // Reduced from 500KB to 300KB
+      setError('User photo too large. Please upload an image under 300KB.');
       console.error('Upload rejected: File size', file.size, 'bytes');
+      setShowCompressionPrompt(true);
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const base64String = reader.result;
       console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
-      resizeImage(base64String, 320, 240, (resizedData) => {
+      resizeImage(base64String, 240, 180, (resizedData) => { // Reduced to 240x180
         if (resizedData) {
           setUserPhoto(resizedData);
           console.log('Resized user photo size:', resizedData.length, 'bytes');
@@ -169,13 +171,13 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       return null;
     }
 
-    canvas.width = Math.min(video.videoWidth, 320); // Reduced from 480
-    canvas.height = Math.min(video.videoHeight, 240); // Reduced from 360
+    canvas.width = Math.min(video.videoWidth, 240); // Reduced from 320
+    canvas.height = Math.min(video.videoHeight, 180); // Reduced from 240
 
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const imageData = canvas.toDataURL('image/jpeg', 0.2); // Lowered quality from 0.3
+    const imageData = canvas.toDataURL('image/jpeg', 0.1); // Lowered quality to 0.1
     console.log('✅ Captured frame length:', imageData.length, 'bytes, Dimensions:', canvas.width, 'x', canvas.height);
     return imageData.startsWith('data:image') ? imageData : null;
   };
@@ -207,12 +209,12 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error('Failed to capture valid initial frame');
       }
 
-      if (friendPhoto.length > 1500000 || initialFrame.length > 1500000) {
+      if (friendPhoto.length > 2000000 || initialFrame.length > 2000000) { // Increased to 2M chars (~1.5MB)
         console.error('Image too large:', {
           friend_photo_length: friendPhoto.length,
           user_photo_length: initialFrame.length,
         });
-        throw new Error('Images too large. Please use images under 1.1MB.');
+        throw new Error('Images too large. Please use images under 1.5MB.');
       }
 
       console.log('Sending initialize request with:', {
@@ -264,6 +266,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         setError('The request took too long. Please check your connection and try again.');
       } else {
         setError(`Initialization failed: ${error.message}`);
+        setShowCompressionPrompt(error.message.includes('Images too large'));
       }
 
       // Fallback: Try standard mode
@@ -518,6 +521,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     });
     setIsProcessing(false);
     setError(null);
+    setShowCompressionPrompt(false);
     setIsInitialized(false);
     setTrackingQuality('unknown');
     setFrameCount(0);
@@ -732,9 +736,24 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
               <div className="text-white/90 text-sm mb-4 leading-relaxed">
                 {error}
               </div>
+              {showCompressionPrompt && (
+                <div className="text-white/90 text-sm mb-4 leading-relaxed">
+                  <AlertTriangle className="w-5 h-5 text-yellow-400 inline-block mr-2" />
+                  Please compress your image to under 300KB using a tool like{' '}
+                  <a
+                    href="https://tinyjpg.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 underline"
+                  >
+                    TinyJPG
+                  </a>.
+                </div>
+              )}
               <Button
                 onClick={() => {
                   setError(null);
+                  setShowCompressionPrompt(false);
                   handleRetry();
                 }}
                 className="bg-red-600 hover:bg-red-700 text-white w-full"
