@@ -47,12 +47,13 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     }
     if (file.size > 500000) {
       setError('User photo too large. Please upload an image under 500KB');
+      console.error('Upload rejected: File size', file.size, 'bytes');
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const base64String = reader.result;
-      console.log('Uploaded user photo size:', base64String.length, 'Preview:', base64String.substring(0, 50));
+      console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
       setUserPhoto(base64String);
     };
     reader.onerror = () => setError('Failed to read user photo');
@@ -75,7 +76,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       } catch (err) {
         console.error('Video stream error:', err.name, err.message);
         setError('Failed to access camera. Please upload a user photo or switch to standard mode.');
-        setForceStandardMode(true); // Switch to standard mode if camera fails
+        setForceStandardMode(true);
       }
     };
 
@@ -135,14 +136,14 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       return null;
     }
 
-    canvas.width = Math.min(video.videoWidth, 640);
-    canvas.height = Math.min(video.videoHeight, 480);
+    canvas.width = Math.min(video.videoWidth, 480); // Reduced from 640
+    canvas.height = Math.min(video.videoHeight, 360); // Reduced from 480
 
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const imageData = canvas.toDataURL('image/jpeg', 0.5); // Lower quality to reduce size
-    console.log('✅ Captured frame length:', imageData.length, 'Preview:', imageData.substring(0, 50));
+    const imageData = canvas.toDataURL('image/jpeg', 0.3); // Lowered quality from 0.5
+    console.log('✅ Captured frame length:', imageData.length, 'bytes, Preview:', imageData.substring(0, 50));
     return imageData.startsWith('data:image') ? imageData : null;
   };
 
@@ -173,12 +174,12 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         throw new Error('Failed to capture valid initial frame');
       }
 
-      if (friendPhoto.length > 500000 || initialFrame.length > 500000) {
+      if (friendPhoto.length > 1000000 || initialFrame.length > 1000000) {
         console.error('Image too large:', {
           friend_photo_length: friendPhoto.length,
           user_photo_length: initialFrame.length,
         });
-        throw new Error('Images too large. Please use images under 500KB.');
+        throw new Error('Images too large. Please use images under 750KB.');
       }
 
       console.log('Sending initialize request with:', {
