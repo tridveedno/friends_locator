@@ -34,7 +34,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const lastProcessTime = useRef(0);
   const processingInterval = 1000;
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://8ad734a7f05d.ngrok-free.app';
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://9fe19749a652.ngrok-free.app';
 
   const resizeImage = (imageSrc, maxWidth, maxHeight, quality, callback) => {
     const img = new Image();
