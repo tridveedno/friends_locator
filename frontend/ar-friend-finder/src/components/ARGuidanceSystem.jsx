@@ -63,7 +63,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
 
   useEffect(() => {
     if (friendPhoto) {
-      resizeImage(friendPhoto, 160, 120, 0.02, (resizedData) => {
+      resizeImage(friendPhoto, 160, 120, 0.03, (resizedData) => {
         if (resizedData) {
           setProcessedFriendPhoto(resizedData);
           console.log('Processed friend photo size:', resizedData.length, 'bytes');
@@ -95,7 +95,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     reader.onload = () => {
       const base64String = reader.result;
       console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
-      resizeImage(base64String, 160, 120, 0.02, (resizedData) => {
+      resizeImage(base64String, 160, 120, 0.03, (resizedData) => {
         if (resizedData) {
           setUserPhoto(resizedData);
           console.log('Resized user photo size:', resizedData.length, 'bytes');
@@ -188,7 +188,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     canvas.height = 120;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageData = canvas.toDataURL('image/jpeg', 0.02);
+    const imageData = canvas.toDataURL('image/jpeg', 0.03);
     console.log('✅ Captured frame length:', imageData.length, 'bytes, Dimensions:', canvas.width, 'x', canvas.height);
     return imageData.startsWith('data:image') ? imageData : null;
   };
@@ -271,10 +271,20 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       if (result.success) {
         setIsInitialized(true);
         setTrackingQuality(result.tracking_quality || 'good');
-        setUseFallbackMode(result.tracking_quality === 'standard');
+        setUseFallbackMode(false);
         setArResult(result);
         if (!forceStandardMode && result.tracking_quality !== 'standard') {
           startARTracking();
+        }
+        if (forceStandardMode && result.matches_count < 10) {
+          setError('Low landmark matches. Try using photos with clearer or similar landmarks.');
+          setTrackingQuality('poor');
+          setArResult({
+            ...result,
+            instruction: result.instruction || 'No clear direction, try new photos',
+            confidence: 0.3,
+            tracking_quality: 'poor',
+          });
         }
       } else {
         throw new Error(result.error || 'Failed to initialize system');
@@ -319,19 +329,25 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           console.log('Fallback initialize response:', result);
           if (result.success) {
             setIsInitialized(true);
-            setTrackingQuality('standard');
-            setUseFallbackMode(true);
+            setTrackingQuality(result.tracking_quality || 'standard');
+            setUseFallbackMode(false);
             setArResult(result);
+            if (result.matches_count < 10) {
+              setError('Low landmark matches in standard mode. Try using photos with clearer or similar landmarks.');
+              setTrackingQuality('poor');
+              setArResult({
+                ...result,
+                instruction: result.instruction || 'No clear direction, try new photos',
+                confidence: 0.3,
+                tracking_quality: 'poor',
+              });
+            }
           } else {
             throw new Error(result.error || 'Standard mode initialization failed');
           }
         } catch (fallbackError) {
           console.error('Standard mode fallback failed:', fallbackError);
-          if (fallbackError.name === 'AbortError') {
-            setError('Standard mode request timed out. Please check your connection.');
-          } else {
-            setError(`Unable to initialize in standard mode: ${fallbackError.message}`);
-          }
+          setError(`Unable to initialize in standard mode: ${fallbackError.message}`);
           setUseFallbackMode(true);
           setIsInitialized(true);
           setTrackingQuality('poor');
@@ -346,6 +362,20 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
             tracking_quality: 'poor',
           });
         }
+      } else {
+        setUseFallbackMode(true);
+        setIsInitialized(true);
+        setTrackingQuality('poor');
+        setArResult({
+          success: true,
+          distance: 25,
+          angle: 0,
+          direction: 'forward',
+          instruction: 'No clear direction, try new photos (Standard Mode)',
+          confidence: 0.3,
+          matches_count: 0,
+          tracking_quality: 'poor',
+        });
       }
     } finally {
       setIsProcessing(false);
