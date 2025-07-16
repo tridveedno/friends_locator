@@ -37,7 +37,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const processingInterval = 1000;
   const maxRetries = 2;
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://<your-ngrok-id>.ngrok-free.app';
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://c8fe3e3e0653.ngrok-free.app';
   console.log('Backend URL:', backendUrl);
 
   const resizeImage = (imageSrc, maxWidth, maxHeight, quality, callback) => {
