@@ -1,296 +1,142 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import logging
+import base64
 import cv2
 import numpy as np
-import base64
-import io
-from PIL import Image
-import math
-import json
-import logging
-from ar_algorithms import ARNavigationSystem, ARLandmarkTracker, GoniometricCalculator
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from ar_algorithms import analyze_images_for_directions, track_ar
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "https://friends-locator-static.onrender.com"]}})
 
-# Global AR system instance
-ar_system = ARNavigationSystem()
-
-def base64_to_image(base64_string):
-    """Convert base64 string to OpenCV image"""
-    try:
-        if base64_string.startswith('data:image'):
-            base64_string = base64_string.split(',')[1]
-        
-        image_data = base64.b64decode(base64_string)
-        image = Image.open(io.BytesIO(image_data))
-        image = image.convert('RGB')
-        return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-    except Exception as e:
-        logger.error(f"Error converting base64 to image: {e}")
-        return None
-
-def image_to_base64(image):
-    """Convert OpenCV image to base64 string"""
-    try:
-        _, buffer = cv2.imencode('.jpg', image)
-        image_base64 = base64.b64encode(buffer).decode('utf-8')
-        return f"data:image/jpeg;base64,{image_base64}"
-    except Exception as e:
-        logger.error(f"Error converting image to base64: {e}")
-        return None
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)s: %(message)s',
+    handlers=[
+        logging.FileHandler('ar_backend.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 @app.route('/api/ar/initialize', methods=['POST'])
-def initialize_ar_system():
-    """Initialize AR system with friend's photo and user's baseline photo"""
+def initialize_ar():
+    logger.debug("Received request to /api/ar/initialize")
     try:
         data = request.get_json()
-        
-        if not data or 'friend_photo' not in data or 'user_photo' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing required photos'
-            }), 400
-        
-        friend_photo = data['friend_photo']
-        user_photo = data['user_photo']
-        
-        logger.info("Initializing AR system with provided photos")
-        
-        # Initialize the AR system
-        result = ar_system.initialize_from_photos(friend_photo, user_photo)
-        
-        if result['success']:
-            logger.info(f"AR system initialized successfully. Features: {result.get('feature_count', 0)}")
-            return jsonify(result)
-        else:
-            logger.error(f"AR initialization failed: {result.get('error', 'Unknown error')}")
-            return jsonify(result), 500
-            
+        if not data:
+            logger.error("No JSON data provided in request")
+            return jsonify({"success": False, "error": "No data provided"}), 400
+
+        friend_photo = data.get('friend_photo')
+        user_photo = data.get('user_photo')
+        mode = data.get('mode')
+
+        if not friend_photo or not user_photo or not mode:
+            logger.error("Missing required fields: friend_photo=%s, user_photo=%s, mode=%s",
+                        bool(friend_photo), bool(user_photo), mode)
+            return jsonify({"success": False, "error": "Missing friend_photo, user_photo, or mode"}), 400
+
+        if mode not in ['ar', 'standard']:
+            logger.error("Invalid mode: %s", mode)
+            return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
+
+        logger.debug("Request data: mode=%s, friend_photo_length=%d, user_photo_length=%d, friend_photo_preview=%s, user_photo_preview=%s",
+                    mode, len(friend_photo), len(user_photo), friend_photo[:50], user_photo[:50])
+
+        # Decode base64 images
+        try:
+            friend_photo_data = base64.b64decode(friend_photo.split(',')[1])
+            user_photo_data = base64.b64decode(user_photo.split(',')[1])
+            logger.debug("Decoded images: friend_photo_size=%d bytes, user_photo_size=%d bytes",
+                        len(friend_photo_data), len(user_photo_data))
+        except Exception as e:
+            logger.error("Failed to decode base64 images: %s", str(e))
+            return jsonify({"success": False, "error": f"Invalid image data: {str(e)}"}), 400
+
+        # Convert to OpenCV images
+        try:
+            friend_img = cv2.imdecode(np.frombuffer(friend_photo_data, np.uint8), cv2.IMREAD_COLOR)
+            user_img = cv2.imdecode(np.frombuffer(user_photo_data, np.uint8), cv2.IMREAD_COLOR)
+            if friend_img is None or user_img is None:
+                logger.error("Failed to decode images to OpenCV format: friend_img=%s, user_img=%s",
+                            friend_img is None, user_img is None)
+                return jsonify({"success": False, "error": "Failed to decode images"}), 400
+            logger.debug("OpenCV images created: friend_img_shape=%s, user_img_shape=%s",
+                        str(friend_img.shape), str(user_img.shape))
+        except Exception as e:
+            logger.error("Error processing images: %s", str(e))
+            return jsonify({"success": False, "error": f"Image processing error: {str(e)}"}), 500
+
+        # Call algorithm
+        try:
+            result = analyze_images_for_directions(friend_img, user_img, mode)
+            logger.debug("analyze_images_for_directions result: %s", result)
+            if not result.get('success'):
+                logger.warning("Analysis failed: %s", result.get('error', 'No error message'))
+                return jsonify(result), 200
+            return jsonify(result), 200
+        except Exception as e:
+            logger.error("Error in analyze_images_for_directions: %s", str(e))
+            return jsonify({"success": False, "error": f"Analysis error: {str(e)}"}), 500
+
     except Exception as e:
-        logger.error(f"Exception in AR initialization: {e}")
-        return jsonify({
-            'success': False,
-            'error': f'Server error during initialization: {str(e)}'
-        }), 500
+        logger.error("Unexpected error in /api/ar/initialize: %s", str(e))
+        return jsonify({"success": False, "error": f"Server error: {str(e)}"}), 500
 
 @app.route('/api/ar/track', methods=['POST'])
-def track_ar_frame():
-    """Process current AR frame for real-time tracking"""
+def track_ar_route():
+    logger.debug("Received request to /api/ar/track")
     try:
         data = request.get_json()
-        
-        if not data or 'current_frame' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing current frame'
-            }), 400
-        
-        current_frame = data['current_frame']
-        
-        # Process the frame
-        result = ar_system.process_ar_frame(current_frame)
-        
-        if result['success']:
-            logger.debug(f"Frame processed successfully. Distance: {result.get('distance', 0):.1f}m")
-        else:
-            logger.debug(f"Frame processing issue: {result.get('error', 'Unknown')}")
-        
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"Exception in AR tracking: {e}")
-        return jsonify({
-            'success': False,
-            'error': f'Server error during tracking: {str(e)}'
-        }), 500
+        if not data:
+            logger.error("No JSON data provided in request")
+            return jsonify({"success": False, "error": "No data provided"}), 400
 
-@app.route('/api/photo/analyze', methods=['POST'])
-def analyze_photos():
-    """Legacy endpoint for standard photo analysis (non-AR mode)"""
-    try:
-        data = request.get_json()
-        
-        if not data or 'friend_photo' not in data or 'user_photo' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing required photos'
-            }), 400
-        
-        friend_photo = data['friend_photo']
-        user_photo = data['user_photo']
-        
-        logger.info("Processing photos for standard analysis")
-        
-        # Use the AR system for one-time analysis
-        temp_ar_system = ARNavigationSystem()
-        init_result = temp_ar_system.initialize_from_photos(friend_photo, user_photo)
-        
-        if not init_result['success']:
-            logger.error(f"Initialization failed: {init_result.get('error')}")
-            return jsonify(init_result), 500
-        
-        # Process the user photo as a single frame
-        result = temp_ar_system.process_ar_frame(user_photo)
-        
-        if result['success']:
-            logger.info(f"Analysis successful: Distance={result['distance']:.1f}m, Matches={result.get('matches_count', 0)}")
-            return jsonify({
-                'success': True,
-                'distance': result['distance'],
-                'angle': result['angle'],
-                'direction': result['direction'],
-                'instruction': result['instruction'],
-                'confidence': result.get('confidence', 0.8),
-                'method': 'computer_vision_analysis',
-                'output_image_base64': result.get('output_image_base64')
-            })
-        else:
-            logger.error(f"Analysis failed: {result.get('error')}, Matches={result.get('matches_count', 0)}")
-            return jsonify({
-                'success': False,
-                'error': result.get('error'),
-                'tracking_quality': result.get('tracking_quality', 'poor'),
-                'output_image_base64': result.get('output_image_base64')
-            }), 500
-            
-    except Exception as e:
-        logger.error(f"Exception in photo analysis: {e}")
-        return jsonify({
-            'success': False,
-            'error': f'Server error during analysis: {str(e)}'
-        }), 500
+        current_frame = data.get('current_frame')
+        if not current_frame:
+            logger.error("Missing current_frame")
+            return jsonify({"success": False, "error": "Missing current_frame"}), 400
 
-@app.route('/api/ar/calibrate', methods=['POST'])
-def calibrate_ar_system():
-    """Calibrate AR system with known landmark dimensions"""
-    try:
-        data = request.get_json()
-        
-        landmark_width = data.get('landmark_width', 1.0)  # meters
-        landmark_height = data.get('landmark_height', 1.0)  # meters
-        
-        # Update AR system calibration
-        if hasattr(ar_system.tracker, 'set_landmark_dimensions'):
-            ar_system.tracker.set_landmark_dimensions(landmark_width, landmark_height)
-        
-        return jsonify({
-            'success': True,
-            'message': 'AR system calibrated',
-            'landmark_dimensions': {
-                'width': landmark_width,
-                'height': landmark_height
-            }
-        })
-        
-    except Exception as e:
-        logger.error(f"Exception in AR calibration: {e}")
-        return jsonify({
-            'success': False,
-            'error': f'Calibration failed: {str(e)}'
-        }), 500
+        logger.debug("Track request data: current_frame_length=%d, current_frame_preview=%s",
+                    len(current_frame), current_frame[:50])
 
-@app.route('/api/ar/status', methods=['GET'])
-def get_ar_status():
-    """Get current AR system status"""
-    try:
-        status = {
-            'initialized': ar_system.tracker.reference_descriptors is not None,
-            'opencv_version': cv2.__version__,
-            'features_available': ['SIFT', 'ORB', 'FLANN', 'BF_Matcher'],
-            'tracking_methods': ['homography', 'pose_estimation', 'feature_matching']
-        }
-        
-        if status['initialized']:
-            status['reference_features'] = len(ar_system.tracker.reference_keypoints) if ar_system.tracker.reference_keypoints else 0
-        
-        return jsonify({
-            'success': True,
-            'status': status
-        })
-        
-    except Exception as e:
-        logger.error(f"Exception getting AR status: {e}")
-        return jsonify({
-            'success': False,
-            'error': f'Status check failed: {str(e)}'
-        }), 500
+        # Decode base64 frame
+        try:
+            frame_data = base64.b64decode(current_frame.split(',')[1])
+            logger.debug("Decoded frame: size=%d bytes", len(frame_data))
+        except Exception as e:
+            logger.error("Failed to decode base64 frame: %s", str(e))
+            return jsonify({"success": False, "error": f"Invalid frame data: {str(e)}"}), 400
 
-@app.route('/api/ar/debug', methods=['POST'])
-def debug_ar_processing():
-    """Debug endpoint for AR processing with detailed output"""
-    try:
-        data = request.get_json()
-        
-        if not data or 'current_frame' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing current frame'
-            }), 400
-        
-        current_frame = data['current_frame']
-        
-        # Convert to image for debugging
-        image = base64_to_image(current_frame)
-        if image is None:
-            return jsonify({
-                'success': False,
-                'error': 'Invalid image format'
-            }), 400
-        
-        # Extract features for debugging
-        keypoints, descriptors = ar_system.tracker.extract_features(image, use_sift=True)
-        
-        debug_info = {
-            'image_shape': image.shape,
-            'keypoints_detected': len(keypoints) if keypoints else 0,
-            'descriptors_shape': descriptors.shape if descriptors is not None else None,
-            'reference_initialized': ar_system.tracker.reference_descriptors is not None
-        }
-        
-        if ar_system.tracker.reference_descriptors is not None:
-            # Try matching
-            matches = ar_system.tracker.match_features(
-                ar_system.tracker.reference_descriptors,
-                descriptors,
-                use_sift=True
-            )
-            debug_info['matches_found'] = len(matches)
-        
-        return jsonify({
-            'success': True,
-            'debug_info': debug_info
-        })
-        
-    except Exception as e:
-        logger.error(f"Exception in AR debug: {e}")
-        return jsonify({
-            'success': False,
-            'error': f'Debug failed: {str(e)}'
-        }), 500
+        # Convert to OpenCV image
+        try:
+            frame_img = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+            if frame_img is None:
+                logger.error("Failed to decode frame to OpenCV format")
+                return jsonify({"success": False, "error": "Failed to decode frame"}), 400
+            logger.debug("OpenCV frame created: shape=%s", str(frame_img.shape))
+        except Exception as e:
+            logger.error("Error processing frame: %s", str(e))
+            return jsonify({"success": False, "error": f"Frame processing error: {str(e)}"}), 500
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'opencv_available': True,
-        'opencv_version': cv2.__version__
-    })
+        # Call tracking algorithm
+        try:
+            result = track_ar(frame_img)
+            logger.debug("track_ar result: %s", result)
+            if not result.get('success'):
+                logger.warning("Tracking failed: %s", result.get('error', 'No error message'))
+                return jsonify(result), 200
+            return jsonify(result), 200
+        except Exception as e:
+            logger.error("Error in track_ar: %s", str(e))
+            return jsonify({"success": False, "error": f"Tracking error: {str(e)}"}), 500
+
+    except Exception as e:
+        logger.error("Unexpected error in /api/ar/track: %s", str(e))
+        return jsonify({"success": False, "error": f"Server error: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    logger.info("Starting AR-enhanced Flask backend")
-    logger.info(f"OpenCV version: {cv2.__version__}")
-    
-    # Test AR system initialization
-    try:
-        test_system = ARLandmarkTracker()
-        logger.info("AR system components loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load AR system: {e}")
-    
+    logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, debug=True)
