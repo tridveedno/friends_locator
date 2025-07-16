@@ -38,7 +38,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const maxRetries = 2;
   const resultHistory = useRef([]); // Store recent results for smoothing
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://c8fe3e3e0653.ngrok-free.app';
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://friends-locator-web.onrender.com';
   console.log('Backend URL:', backendUrl);
 
   const resizeImage = (imageSrc, maxWidth, maxHeight, quality, callback) => {
