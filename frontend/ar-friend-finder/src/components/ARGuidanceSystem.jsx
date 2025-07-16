@@ -36,8 +36,9 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   const lastProcessTime = useRef(0);
   const processingInterval = 1000;
   const maxRetries = 2;
+  const resultHistory = useRef([]); // Store recent results for smoothing
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://c8fe3e3e0653.ngrok-free.app';
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
   console.log('Backend URL:', backendUrl);
 
   const resizeImage = (imageSrc, maxWidth, maxHeight, quality, callback) => {
@@ -100,7 +101,6 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
       console.log('Uploaded user photo size:', base64String.length, 'bytes, Preview:', base64String.substring(0, 50));
       resizeImage(base64String, 320, 240, 0.05, (resizedData) => {
         if (resizedData) {
-          // Check image quality
           const img = new Image();
           img.onload = () => {
             const canvas = document.createElement('canvas');
@@ -136,12 +136,13 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
   };
 
   useEffect(() => {
-    const setupVideo = async () => {
+    const setupVideo = async (attempt = 1, maxAttempts = 3) => {
       if (!videoRef.current || forceStandardMode) {
         console.log('Skipping video setup: forceStandardMode:', forceStandardMode, 'videoRef:', !!videoRef.current);
         return;
       }
       try {
+        console.log(`Attempting camera setup, attempt ${attempt}/${maxAttempts}`);
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
         });
@@ -152,9 +153,14 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
           console.log('✅ Camera stream started successfully');
         };
       } catch (err) {
-        console.error('Video stream error:', { name: err.name, message: err.message });
-        setError('Failed to access camera. Please upload a photo or switch to standard mode.');
-        setForceStandardMode(true);
+        console.error('Video stream error:', { name: err.name, message: err.message, attempt });
+        if (attempt < maxAttempts) {
+          console.log(`Retrying camera setup in 1s, attempt ${attempt + 1}/${maxAttempts}`);
+          setTimeout(() => setupVideo(attempt + 1, maxAttempts), 1000);
+        } else {
+          setError('Failed to access camera. Please upload a photo or switch to standard mode.');
+          setForceStandardMode(true);
+        }
       }
     };
 
@@ -487,12 +493,30 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
         console.log('Track response data:', JSON.stringify(result, null, 2));
 
         if (result.success) {
-          setArResult(result);
-          setTrackingQuality(result.tracking_quality || 'good');
+          // Smooth results
+          resultHistory.current.push({
+            distance: result.distance,
+            angle: result.angle,
+            direction: result.direction,
+            confidence: result.confidence
+          });
+          if (resultHistory.current.length > 5) resultHistory.current.shift();
+
+          const smoothedResult = {
+            ...result,
+            distance: resultHistory.current.reduce((sum, r) => sum + r.distance, 0) / resultHistory.current.length,
+            angle: resultHistory.current.reduce((sum, r) => sum + r.angle, 0) / resultHistory.current.length,
+            direction: resultHistory.current[resultHistory.current.length - 1].direction,
+            confidence: resultHistory.current.reduce((sum, r) => sum + r.confidence, 0) / resultHistory.current.length,
+            instruction: `Turn ${result.direction} ${Math.round(resultHistory.current.reduce((sum, r) => sum + r.angle, 0) / resultHistory.current.length)} degrees and walk ${Math.round(resultHistory.current.reduce((sum, r) => sum + r.distance, 0) / resultHistory.current.length)} meters toward the landmark`
+          };
+
+          setArResult(smoothedResult);
+          setTrackingQuality(smoothedResult.tracking_quality || 'good');
           setError(null);
           setUseFallbackMode(false);
-          updateArrowGuidance(result);
-          drawAROverlays(result);
+          updateArrowGuidance(smoothedResult);
+          drawAROverlays(smoothedResult);
         } else {
           throw new Error(result.error || 'Tracking failed');
         }
@@ -632,6 +656,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
     setTargetRotation(0);
     setUseFallbackMode(false);
     setRetryCount(0);
+    resultHistory.current = [];
     setTimeout(() => {
       console.log('Retrying initializeARSystem with forceStandardMode:', forceStandardMode);
       initializeARSystem();
@@ -741,6 +766,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                   tracking_quality: 'poor',
                 });
                 setRetryCount(0);
+                resultHistory.current = [];
                 cleanupAR();
               }}
               variant="outline"
@@ -819,7 +845,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
               <div className="flex items-center justify-center mb-3">
                 <MapPin className="w-6 h-6 text-orange-400 mr-2" />
                 <span className="text-white text-2xl font-bold">
-                  {Math.round(arResult.distance)}m away
+                  {Math.round(arResult.distance)}m to landmark
                 </span>
               </div>
               <div className="text-white/90 text-base mb-4 leading-relaxed">
@@ -865,7 +891,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                   ? 'Tracking landmarks in real-time'
                   : forceStandardMode
                   ? 'Comparing your photo with friend’s photo'
-                  : 'Analyzing landmark features and calibrating'}
+                  : 'Analyzing landmark features to guide you to the landmark'}
               </div>
             </div>
           </div>
@@ -913,7 +939,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                 Upload Your Photo
               </div>
               <div className="text-white/90 text-sm mb-4 leading-relaxed">
-                Please upload a photo of the same landmark as your friend’s photo for standard mode analysis. Ensure it’s well-lit with distinct features.
+                Please upload a photo of the same landmark as your friend’s photo to find the direction to it.
               </div>
               <input
                 type="file"
@@ -931,7 +957,7 @@ const ARGuidanceSystem = ({ friendPhoto, onBack, onAnalysisComplete }) => {
                 Point your camera at the same landmark visible in your friend's photo
               </div>
               <div className="text-white/70 text-sm">
-                For best results, use a well-lit area with distinct landmarks. Avoid dark or uniform scenes.
+                For best results, use a well-lit area with distinct landmarks to guide you to the landmark's location.
               </div>
             </div>
           </div>
